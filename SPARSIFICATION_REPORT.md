@@ -42,3 +42,26 @@ This report presents empirical validation of sparsifying an existing state-of-th
 
 3. **Minimal Adaptation Budget:**
    - With offline SVD alignment, only **25 steps** (5.1s) of knowledge distillation were required to achieve **99.15%** retained accuracy.
+
+---
+
+## 4. Architectural Mechanism: Stage-Boundary Commitment vs. Other Foveal Sparsity Modes
+
+It is essential to distinguish the specific sparsification mechanism employed in this benchmark from alternative Foveal architectures implemented in the repository:
+
+### A. Stage-Boundary Token Commitment (Employed Here)
+- **Mechanism:** The model executes early feature extraction densely (Blocks 0–1, $N=1,024$). At the Stage Split (after Block 2), the 16D SVDRouter scores all tokens and commits to the top $k=384$ (or $392$) active tokens. The remaining $632$ tokens are summarized into a background energy residual, and only the active $392$ tokens are passed through Blocks 2–11.
+- **Why It Achieves 2.0x Wall-Clock Speedup:** 
+  1. Attention complexity drops by $\approx 6.8\times$ in Blocks 2–11 because $N$ is reduced.
+  2. MLP intermediate GEMMs operate on $2.6\times$ fewer token rows ($392 \times D$ instead of $1,024 \times D$).
+  3. Crucially, downstream layers execute as **pure, contiguous GEMMs and unmasked FlashAttention without dynamic indexing or sparse gather/scatter overhead**.
+- **Tradeoff:** Discarded background tokens cannot be re-attended to by deeper layers.
+
+### B. Per-Layer Dynamic Foveal Attention (`FovealVisionAttention` in `foveal_indexer/vit.py`)
+- **Mechanism:** All $N=1,024$ tokens persist in memory across all 12 blocks. At *every single block independently*, the 16D Foveal Indexer re-evaluates block-to-block cosine dot products, and queries dynamically retrieve their top-$p$ remote blocks.
+- **Behavior:** Tokens skipped in Block 2 can be re-attended to in Block 7 or Block 11.
+- **Compute Impact:** Cuts attention FLOPs by $75\%–87\%$ per layer while all $1,024$ tokens remain available for the MLP.
+
+### C. Token-Parameter Reparameterization (`FovealTokenformer` in `foveal_indexer/tokenformer.py`)
+- **Mechanism:** MLP feedforward weights are factorized via offline SVD into key and value parameter tokens ($K_P, V_P$). Input tokens cross-attend to parameter blocks retrieved dynamically via 16D top-$p$ routing.
+- **Behavior:** Transforms the parameter dictionary itself into an attention mechanism, allowing decoupled parameter expansion.

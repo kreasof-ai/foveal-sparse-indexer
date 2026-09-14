@@ -155,6 +155,12 @@ Empirical validation of sparsifying an existing pretrained Vision Transformer fr
 | **Dynamic Sparsity** | 0.0% | **62.5%** | Active tokens: 384–392 / 1024 | — |
 | **Adaptation Wall-Clock** | N/A | **122.58 s** | $\le 300$ s (5 minutes) | **PASSED** |
 
+### Architectural Mechanism: Stage-Boundary Commitment vs. Other Foveal Modes
+
+- **Stage-Boundary Commitment (Used Here):** The model processes Blocks 0–1 densely ($N=1024$). At Block 2, the 16D SVD Router commits to the active $k=392$ tokens. Downstream layers (Blocks 2–11) execute on only these $392$ tokens with contiguous dense GEMMs and unmasked FlashAttention, reducing attention compute by $6.8\times$ and MLP token rows by $2.6\times$ with zero sparse gather overhead.
+- **Per-Layer Dynamic Foveal Attention (`FovealVisionAttention`):** All $1,024$ tokens persist across all 12 blocks, and each block independently evaluates block-to-block cosine scores to retrieve top-$p$ remote blocks dynamically.
+- **Token-Parameter Reparameterization (`FovealTokenformer`):** Pretrained weights are factorized via offline SVD into $(K_P, V_P)$ parameter tokens, transforming feedforward layers into dynamic token-parameter cross-attention.
+
 ---
 
 ## 4. Peak Memory Scaling: Static Parameters vs. Constant Active Budget
