@@ -10,6 +10,7 @@ A comprehensive empirical benchmark suite measuring **Foveal Sparse Indexing** a
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **CIFAR-10 Speedrun (to 90% Acc)** | **A10G (Ampere)** | 126.29 s (91.11% acc, 29.2% MFU) | **57.02 s (91.23% acc)** | **2.21× faster (45.1% wall-clock time)** | **51.7% less peak VRAM** (98.4% sparse) |
 | **Tokenformer E2E Training** | **A10G (Ampere)** | 119.97 s (43.82% acc) | **90.71 s (45.85% acc)** | **1.32× faster training** | **+2.03% higher accuracy** (93.8% sparse) |
+| **YOLO11x Detection (COCO val2017)** | **A10G (Ampere)** | 132.18 ms (54.14% mAP50-95, 71.0% mAP50) | **32.80 ms (50.80% mAP50-95, 67.6% mAP50)** | **4.03× faster inference (487.8 img/s)** | **95.1% mAP retention** (64.7% fewer params) |
 | **Tokenformer Inference (B=128)** | **A10G (Ampere)** | 22.47 ms | **12.85 ms** | **1.75× faster inference** | **93.8% parameter sparsity** |
 | **Visual Attention E2E Training** | **A10G (Ampere)** | 151.67 s (29.65% acc) | **120.69 s (27.10% acc)** | **1.26× faster training** | **16× attention FLOP reduction** (93.8% sparse) |
 | **Triton Attention ($N=8192$)** | **A10G (Ampere)** | 17.208 ms (SDPA) | **0.665 ms (Triton)** | **25.87× faster** | **98.4% attention sparsity** |

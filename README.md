@@ -52,20 +52,28 @@ foveal-sparse-indexer/
 │   ├── attention.py        # Foveal Sparse Attention & O(1) decode KV-cache
 │   ├── tokenformer.py      # Foveal Tokenformer (Token-Parameter Attention with blocked parameter tokens)
 │   ├── block_matmul.py     # Blockwise Sparse MatMul (64x64 / 128x128 tiled linear projections)
-│   └── vit.py              # Small Vision Transformer (Dense and Foveal Sparse blocks)
+│   ├── vit.py              # Small Vision Transformer (Dense and Foveal Sparse blocks)
+│   ├── sparsify.py         # Practical Timm ViT sparsification with Offline SVD router
+│   └── yolo_sparsify.py    # YOLO11 sparsification (Foveal PSA attention & SVD compression)
 ├── tests/
 │   ├── test_indexer.py     # Unit tests for routing, guardrails, and gradients
 │   ├── test_attention.py   # Causal masking, KV cache decode, prefill distillation
 │   ├── test_tokenformer.py # Parameter token block routing & gradient verification
 │   ├── test_block_matmul.py# Block matmul forward, backward & sparsity verification
-│   └── test_vit.py         # ViT forward pass and gradient checks
+│   ├── test_vit.py         # ViT forward pass and gradient checks
+│   ├── test_sparsify.py    # Offline SVD router and ViT sparsification tests
+│   └── test_yolo_sparsify.py # Unit tests for YOLO11 Foveal attention and SVD compression
 ├── examples/
 │   ├── demo_mnist_vit.py              # MNIST ViT comparison (Dense vs Foveal Sparse)
 │   ├── demo_attention_flat_decode.py  # Flat decoding latency benchmark (CPU)
 │   ├── demo_tokenformer_training.py   # Dual-gradient Tokenformer training (CPU)
 │   ├── demo_block_matmul.py           # Blockwise sparse GEMM & FLOP reduction (CPU)
 │   ├── benchmark_all.py               # Multi-domain CPU benchmark suite
-│   └── benchmark_sparse_matmul.py     # Dedicated Sparse vs Dense MatMul scaling
+│   ├── benchmark_sparse_matmul.py     # Dedicated Sparse vs Dense MatMul scaling
+│   ├── sparsify_timm_imagenet.py      # ImageNet-1k ViT sparsification with SVD router
+│   └── sparsify_yolo11x_coco.py       # YOLO11x 4x sparsification on COCO val2017
+├── YOLO11X_SPARSIFICATION_REPORT.md   # Official YOLO11x 4x speedup & >95% mAP retention report
+├── SPARSIFICATION_REPORT.md           # Timm ViT sparsification report
 ├── BENCHMARKS.md           # Full performance reports and audit logs
 ├── run_tests.py            # Test discovery runner
 └── README.md
