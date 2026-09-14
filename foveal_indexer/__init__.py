@@ -13,6 +13,27 @@ from .yolo_sparsify import (
     FovealYOLOCascade,
     YOLOKnowledgeDistillationLoss,
 )
+from .llm_sparsify import (
+    SVDBridge,
+    compute_layer_redundancy,
+    calibrate_svd_bridge,
+    LLMDistillationLoss,
+    FovealBlockSparseMLP,
+    sparsify_llm_mlps,
+    FovealDynamicSkipMLP,
+    sparsify_llm_dynamic_skips,
+    DynamicSparsityDistillationLoss,
+)
+from .pattention_triton import (
+    triton_pattention,
+    TritonSwiGLUPattentionMLP,
+    convert_llm_mlp_to_pattention,
+)
+from .foveal_pattention import (
+    FovealPattentionMLP,
+    sparsify_model_with_foveal_pattention,
+    FovealPattentionDistillationLoss,
+)
 from .triton_ops import (
     is_triton_available,
     triton_foveal_sparse_attention,
@@ -48,4 +69,19 @@ __all__ = [
     "OfflineSVDChannelCompressor",
     "FovealYOLOCascade",
     "YOLOKnowledgeDistillationLoss",
+    "SVDBridge",
+    "compute_layer_redundancy",
+    "calibrate_svd_bridge",
+    "LLMDistillationLoss",
+    "FovealBlockSparseMLP",
+    "sparsify_llm_mlps",
+    "FovealDynamicSkipMLP",
+    "sparsify_llm_dynamic_skips",
+    "DynamicSparsityDistillationLoss",
+    "triton_pattention",
+    "TritonSwiGLUPattentionMLP",
+    "convert_llm_mlp_to_pattention",
+    "FovealPattentionMLP",
+    "sparsify_model_with_foveal_pattention",
+    "FovealPattentionDistillationLoss",
 ]

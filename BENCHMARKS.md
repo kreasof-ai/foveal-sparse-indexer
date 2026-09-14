@@ -9,7 +9,10 @@ A comprehensive empirical benchmark suite measuring **Foveal Sparse Indexing** a
 | Benchmark Domain | Hardware | Dense Baseline | Foveal Sparse | Wall-Clock Improvement | Sparsity / Memory Advantage |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **CIFAR-10 Speedrun (to 90% Acc)** | **A10G (Ampere)** | 126.29 s (91.11% acc, 29.2% MFU) | **57.02 s (91.23% acc)** | **2.21× faster (45.1% wall-clock time)** | **51.7% less peak VRAM** (98.4% sparse) |
+| **Foveal Pattention LLM Speedrun (16L)** | **A10G (Ampere)** | 23.91 BLEU (95.9 ms prefill) | **24.00 BLEU (81.3 ms prefill)** | **100.4% BLEU retention (1.18×–3.36× faster)** | **75.0%–83.3% parameter sparsity** (1536/6144) |
 | **Tokenformer E2E Training** | **A10G (Ampere)** | 119.97 s (43.82% acc) | **90.71 s (45.85% acc)** | **1.32× faster training** | **+2.03% higher accuracy** (93.8% sparse) |
+| **Hy-MT2-1.8B LLM Translation (WMT22 1K)** | **A10G (Ampere)** | 95.76 ms prefill / 37.84 ms decode | **79.58 ms prefill / 32.65 ms decode** | **1.20× prefill / 1.16× decode (1.85× at 16L)** | **86.0% BLEU retention** (17.00 vs 19.77 BLEU) |
+| **Dynamic Foveal SwiGLU Skip (10 Layers)** | **A10G (Ampere)** | 95.73 ms prefill / 38.91 ms decode | **90.39 ms prefill / 40.35 ms decode** | **13.6% dynamic skip rate** | **89.7% BLEU retention** (21.44 vs 23.91 BLEU) |
 | **YOLO11x Detection (COCO val2017)** | **A10G (Ampere)** | 132.18 ms (54.14% mAP50-95, 71.0% mAP50) | **32.80 ms (50.80% mAP50-95, 67.6% mAP50)** | **4.03× faster inference (487.8 img/s)** | **95.1% mAP retention** (64.7% fewer params) |
 | **Tokenformer Inference (B=128)** | **A10G (Ampere)** | 22.47 ms | **12.85 ms** | **1.75× faster inference** | **93.8% parameter sparsity** |
 | **Visual Attention E2E Training** | **A10G (Ampere)** | 151.67 s (29.65% acc) | **120.69 s (27.10% acc)** | **1.26× faster training** | **16× attention FLOP reduction** (93.8% sparse) |
