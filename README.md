@@ -40,6 +40,14 @@ Across all modalities, the foundational indexing principles remain identical:
 - **Spatial Patch-Block Attention:** 2D images are tiled into $P$ patches (e.g. 64 patches of $4 \times 4$). Self-block attention retains local spatial features while 16D Foveal Indexer retrieves remote image quadrants.
 - **Combined Sparsity:** Couples block-sparse attention with block-sparse MLP for end-to-end vision classification.
 
+### 5. LLM Foveal Pattention Reparameterization (`FovealPattentionMLP`, `triton_pattention`)
+- **Flagship LLM Architecture:** Reparameterizes standard SwiGLU MLP layers into non-softmax Token-Parameter Attention:
+  $$y = \sum_{b \in \mathcal{B}_{\text{active}}} \left(\text{SiLU}(x K_{\text{gate}, b}^T) \odot (x K_{\text{up}, b}^T)\right) V_b^T + W_{\text{out}, 16D} \left(\text{Softmax}(S_{16D} / T) K_{16D}\right)$$
+- **64-Token Parameter Blocks:** $N_P = 6,144$ parameter tokens partitioned into 96 blocks of size 64.
+- **Offline SVD Router:** Empirical activation covariance SVD ($X = U S V^T \to V_{16}^T$) + closed-form Ridge Regression on teacher block energy (initial KL: **`0.0089`**).
+- **Dual-Gradient Engine:** Differentiable 16D additive context stream combined with dense KL distillation ($D_{\text{KL}}(P_{\text{teacher\_mass}} \parallel \text{Softmax}(S_{\text{student}} / T))$).
+- **Hardware Acceleration:** Fused Triton SRAM register execution delivers **6.51× layer speedup** and up to **3.36× prefill speedup** on NVIDIA A10G while retaining **100.4% BLEU (24.00 vs 23.91)** on held-out WMT22.
+
 ---
 
 ## Codebase Architecture
@@ -48,34 +56,43 @@ Across all modalities, the foundational indexing principles remain identical:
 foveal-sparse-indexer/
 ├── foveal_indexer/
 │   ├── __init__.py
-│   ├── core.py             # 16D FovealIndexer, top-p block routing, additive stream & KL loss
-│   ├── attention.py        # Foveal Sparse Attention & O(1) decode KV-cache
-│   ├── tokenformer.py      # Foveal Tokenformer (Token-Parameter Attention with blocked parameter tokens)
-│   ├── block_matmul.py     # Blockwise Sparse MatMul (64x64 / 128x128 tiled linear projections)
-│   ├── vit.py              # Small Vision Transformer (Dense and Foveal Sparse blocks)
-│   ├── sparsify.py         # Practical Timm ViT sparsification with Offline SVD router
-│   └── yolo_sparsify.py    # YOLO11 sparsification (Foveal PSA attention & SVD compression)
+│   ├── core.py                    # 16D FovealIndexer, top-p block routing, additive stream & KL loss
+│   ├── foveal_pattention.py       # [MAIN LLM] Foveal Pattention with SVD router & additive stream
+│   ├── pattention_triton.py       # [MAIN LLM] Fused non-softmax Triton Pattention kernel
+│   ├── attention.py               # Foveal Sparse Attention & O(1) decode KV-cache
+│   ├── tokenformer.py             # Foveal Tokenformer (Token-Parameter Attention with blocked parameter tokens)
+│   ├── block_matmul.py            # Blockwise Sparse MatMul (64x64 / 128x128 tiled linear projections)
+│   ├── vit.py                     # Small Vision Transformer (Dense and Foveal Sparse blocks)
+│   ├── sparsify.py                # Practical Timm ViT sparsification with Offline SVD router
+│   ├── yolo_sparsify.py           # YOLO11 sparsification (Foveal PSA attention & SVD compression)
+│   └── llm_sparsify.py            # LLM distillation losses and legacy profiling
 ├── tests/
-│   ├── test_indexer.py     # Unit tests for routing, guardrails, and gradients
-│   ├── test_attention.py   # Causal masking, KV cache decode, prefill distillation
-│   ├── test_tokenformer.py # Parameter token block routing & gradient verification
-│   ├── test_block_matmul.py# Block matmul forward, backward & sparsity verification
-│   ├── test_vit.py         # ViT forward pass and gradient checks
-│   ├── test_sparsify.py    # Offline SVD router and ViT sparsification tests
-│   └── test_yolo_sparsify.py # Unit tests for YOLO11 Foveal attention and SVD compression
+│   ├── test_foveal_pattention.py  # Unit tests for Foveal Pattention, SVD calibration & KL loss
+│   ├── test_indexer.py            # Unit tests for routing, guardrails, and gradients
+│   ├── test_attention.py          # Causal masking, KV cache decode, prefill distillation
+│   ├── test_tokenformer.py        # Parameter token block routing & gradient verification
+│   ├── test_block_matmul.py       # Block matmul forward, backward & sparsity verification
+│   ├── test_vit.py                # ViT forward pass and gradient checks
+│   ├── test_sparsify.py           # Offline SVD router and ViT sparsification tests
+│   └── test_yolo_sparsify.py      # Unit tests for YOLO11 Foveal attention and SVD compression
 ├── examples/
-│   ├── demo_mnist_vit.py              # MNIST ViT comparison (Dense vs Foveal Sparse)
-│   ├── demo_attention_flat_decode.py  # Flat decoding latency benchmark (CPU)
-│   ├── demo_tokenformer_training.py   # Dual-gradient Tokenformer training (CPU)
-│   ├── demo_block_matmul.py           # Blockwise sparse GEMM & FLOP reduction (CPU)
-│   ├── benchmark_all.py               # Multi-domain CPU benchmark suite
-│   ├── benchmark_sparse_matmul.py     # Dedicated Sparse vs Dense MatMul scaling
-│   ├── sparsify_timm_imagenet.py      # ImageNet-1k ViT sparsification with SVD router
-│   └── sparsify_yolo11x_coco.py       # YOLO11x 4x sparsification on COCO val2017
-├── YOLO11X_SPARSIFICATION_REPORT.md   # Official YOLO11x 4x speedup & >95% mAP retention report
-├── SPARSIFICATION_REPORT.md           # Timm ViT sparsification report
-├── BENCHMARKS.md           # Full performance reports and audit logs
-├── run_tests.py            # Test discovery runner
+│   ├── train_foveal_pattention_speedrun.py # [MAIN LLM] Full Pattention distillation & evaluation
+│   ├── benchmark_triton_pattention.py     # Triton Pattention hardware benchmark
+│   ├── demo_mnist_vit.py                  # MNIST ViT comparison (Dense vs Foveal Sparse)
+│   ├── demo_attention_flat_decode.py      # Flat decoding latency benchmark (CPU)
+│   ├── demo_tokenformer_training.py       # Dual-gradient Tokenformer training (CPU)
+│   ├── demo_block_matmul.py               # Blockwise sparse GEMM & FLOP reduction (CPU)
+│   ├── benchmark_all.py                   # Multi-domain CPU benchmark suite
+│   ├── benchmark_sparse_matmul.py         # Dedicated Sparse vs Dense MatMul scaling
+│   ├── sparsify_timm_imagenet.py          # ImageNet-1k ViT sparsification with SVD router
+│   └── sparsify_yolo11x_coco.py           # YOLO11x 4x sparsification on COCO val2017
+├── archive/
+│   └── hy_mt2_legacy/             # Archived legacy experiments (layer pruning, skip, dense slicing)
+├── FOVEAL_PATTENTION_SPEEDRUN_REPORT.md   # [MAIN LLM] Official Foveal Pattention Speedrun report
+├── YOLO11X_SPARSIFICATION_REPORT.md       # Official YOLO11x 4x speedup & >95% mAP retention report
+├── SPARSIFICATION_REPORT.md               # Timm ViT sparsification report
+├── BENCHMARKS.md                  # Full performance reports and audit logs
+├── run_tests.py                   # Test discovery runner
 └── README.md
 ```
 
