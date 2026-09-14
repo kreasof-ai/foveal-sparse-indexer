@@ -16,7 +16,7 @@ import torch.nn.functional as F
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from examples.train_cifar10_faster_and_better import DenseTokenformerBlock, FovealTokenformerBlock
+from experiments.cifar10.train_cifar10_faster_and_better import DenseTokenformerBlock, FovealTokenformerBlock
 
 
 def profile_memory_scaling(

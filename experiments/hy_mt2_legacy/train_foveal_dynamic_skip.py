@@ -15,7 +15,7 @@ import time
 from typing import List, Tuple, Dict, Any
 
 # Ensure project root is in sys.path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 import sacrebleu
 import torch
@@ -357,7 +357,7 @@ def main():
         print(f"  {r['name']:<34}: {r['pred_sample']}")
 
     # Save Markdown Report
-    report_path = os.path.join(os.path.dirname(__file__), "..", "FOVEAL_DYNAMIC_SKIP_REPORT.md")
+    report_path = os.path.join(os.path.dirname(__file__), "FOVEAL_DYNAMIC_SKIP_REPORT.md")
     content = rf"""# Empirical Report: Dynamic Foveal SwiGLU MLP Skipping for LLMs
 
 **Hardware:** NVIDIA A10G (24GB GDDR6, sm_86, CUDA 13.2, PyTorch 2.14.0+cu130)  
@@ -414,7 +414,7 @@ def main():
 
 ```bash
 # Run end-to-end dynamic skip distillation and evaluation
-python3 examples/train_foveal_dynamic_skip.py --train_steps 250 --eval_samples 100
+python3 experiments/hy_mt2_legacy/train_foveal_dynamic_skip.py --train_steps 250 --eval_samples 100
 ```
 """
     with open(report_path, "w", encoding="utf-8") as f:

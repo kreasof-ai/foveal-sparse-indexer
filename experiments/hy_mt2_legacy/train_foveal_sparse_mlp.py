@@ -19,7 +19,7 @@ import time
 from typing import List, Tuple, Dict, Any
 
 # Ensure project root is in sys.path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 import sacrebleu
 import torch
@@ -339,7 +339,7 @@ def main():
         print(f"  {r['name']:<30}: {r['pred_sample']}")
 
     # Save Markdown Report
-    report_path = os.path.join(os.path.dirname(__file__), "..", "FOVEAL_SPARSE_MLP_REPORT.md")
+    report_path = os.path.join(os.path.dirname(__file__), "FOVEAL_SPARSE_MLP_REPORT.md")
     content = rf"""# Empirical Report: Foveal Block-Sparse SwiGLU MLP for LLMs
 
 **Hardware:** NVIDIA A10G (24GB GDDR6, sm_86, CUDA 13.2, PyTorch 2.14.0+cu130)  
@@ -397,7 +397,7 @@ def main():
 
 ```bash
 # Run end-to-end distillation and evaluation suite
-python3 examples/train_foveal_sparse_mlp.py --train_steps 200 --eval_samples 100
+python3 experiments/hy_mt2_legacy/train_foveal_sparse_mlp.py --train_steps 200 --eval_samples 100
 ```
 """
     with open(report_path, "w", encoding="utf-8") as f:

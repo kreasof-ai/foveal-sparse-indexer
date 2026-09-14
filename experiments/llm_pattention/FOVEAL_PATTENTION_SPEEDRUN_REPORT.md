@@ -30,7 +30,7 @@ To ensure rigorous benchmarking with zero conflation between layer micro-benchma
 
 ## 2. Architectural Blueprint: The Unified Foveal Pattention Engine
 
-Following the principles established in the CIFAR-10 Speedrun (`SPEEDRUN_REPORT.md`), we completely removed traditional blockwise sparse matrix multiplication in favor of **Token-Parameter Attention (Pattention)** with non-softmax SwiGLU gating, 16D SVD router initialization, a differentiable additive context stream, and dense KL distillation.
+Following the principles established in the CIFAR-10 Speedrun ([`experiments/cifar10/SPEEDRUN_REPORT.md`](../cifar10/SPEEDRUN_REPORT.md)), we completely removed traditional blockwise sparse matrix multiplication in favor of **Token-Parameter Attention (Pattention)** with non-softmax SwiGLU gating, 16D SVD router initialization, a differentiable additive context stream, and dense KL distillation.
 
 $$\text{Dense SwiGLU MLP: } y = \left(\text{SiLU}(x W_{\text{gate}}^T) \odot (x W_{\text{up}}^T)\right) W_{\text{down}}^T$$
 $$\text{Foveal Pattention: } y = \sum_{b \in \mathcal{B}_{\text{active}}} \left(\text{SiLU}(x K_{\text{gate}, b}^T) \odot (x K_{\text{up}, b}^T)\right) V_{b}^T + W_{\text{out}, 16D} \left(\text{Softmax}(S_{16D} / T) K_{16D}\right)$$

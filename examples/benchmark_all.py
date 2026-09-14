@@ -6,9 +6,13 @@ Benchmarks:
 3. Tokenformer Parameter Scaling: Dense Tokenformer vs Foveal Tokenformer (N_param=2048).
 """
 
+import os
+import sys
 import time
 import torch
 import torch.nn.functional as F
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from foveal_indexer.attention import FovealSparseAttention
 from foveal_indexer.block_matmul import BlockSparseLinear

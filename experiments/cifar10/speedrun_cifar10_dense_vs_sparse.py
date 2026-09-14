@@ -22,7 +22,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import datasets, transforms
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 
 # =========================================================================
@@ -529,8 +529,10 @@ def run_speedrun_for_model(
 def generate_speedrun_report(
     dense_res: Dict[str, Any],
     sparse_res: Dict[str, Any],
-    report_path: str = "SPEEDRUN_REPORT.md",
+    report_path: Optional[str] = None,
 ) -> str:
+    if report_path is None:
+        report_path = os.path.join(os.path.dirname(__file__), "SPEEDRUN_REPORT.md")
     dense_time = dense_res["hit_time"]
     sparse_time = sparse_res["hit_time"]
     time_ratio = sparse_time / dense_time
@@ -636,7 +638,7 @@ def main():
     parser.add_argument("--weight-decay", type=float, default=5e-4, help="Weight decay (default: 5e-4)")
     parser.add_argument("--max-epochs", type=int, default=11, help="Max training epochs (default: 11)")
     parser.add_argument("--compile", action="store_true", help="Enable torch.compile")
-    parser.add_argument("--report", type=str, default="SPEEDRUN_REPORT.md", help="Destination markdown report")
+    parser.add_argument("--report", type=str, default=os.path.join(os.path.dirname(__file__), "SPEEDRUN_REPORT.md"), help="Destination markdown report")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

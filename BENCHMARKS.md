@@ -231,7 +231,7 @@ Every row below represents an independent, self-contained evaluation with no cro
 - **Layers 0–15 (Syntactic Stem):** Responsible for binding BPE token embeddings with rotary positional coordinates (RoPE). Slicing or dropping channels in these early layers degrades coordinate tracking.
 - **Layers 16–31 (Semantic Reasoning):** Responsible for high-level cross-lingual mapping and lexical selection. Converting layers 16–31 into Foveal Pattention ($N_{\text{act}} = 1024 - 1536$) **achieves 100.4% BLEU retention (24.00 vs. 23.91)** with zero accuracy loss while slashing parameter compute by 75%–83.3%.
 
-*(Note: Earlier exploratory experiments on static SVD layer pruning, PyTorch eager blockwise matmul slicing, and dynamic layer skipping are cataloged in [`archive/hy_mt2_legacy/`](archive/hy_mt2_legacy/)).*
+*(Note: Earlier exploratory experiments on static SVD layer pruning, PyTorch eager blockwise matmul slicing, and dynamic layer skipping are cataloged in [`experiments/hy_mt2_legacy/`](experiments/hy_mt2_legacy/)).*
 
 ---
 

@@ -18,7 +18,7 @@ import time
 from typing import List, Tuple, Dict, Any
 
 # Ensure project root is in sys.path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 import sacrebleu
 import torch
@@ -489,7 +489,7 @@ def main():
     print("  16L-SVD :", preds_16[0])
 
     # Write Markdown Report
-    report_path = os.path.join(os.path.dirname(__file__), "..", "HY_MT2_SPARSIFICATION_REPORT.md")
+    report_path = os.path.join(os.path.dirname(__file__), "HY_MT2_SPARSIFICATION_REPORT.md")
     report_content = rf"""# Empirical Benchmark Report: Foveal Sparsification of tencent/Hy-MT2-1.8B
 
 **Hardware:** NVIDIA A10G (24GB GDDR6, sm_86, Driver 595.91, CUDA 13.2, PyTorch 2.14.0+cu130)  
@@ -548,7 +548,7 @@ def main():
 
 ```bash
 # Run end-to-end evaluation and report generation
-python3 examples/sparsify_hy_mt2.py --eval_samples 50 --adapt_steps 35
+python3 experiments/hy_mt2_legacy/sparsify_hy_mt2.py --eval_samples 50 --adapt_steps 35
 ```
 """
     with open(report_path, "w", encoding="utf-8") as f:

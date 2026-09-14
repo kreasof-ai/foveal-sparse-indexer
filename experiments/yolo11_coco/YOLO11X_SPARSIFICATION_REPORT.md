@@ -177,7 +177,7 @@ Execute the complete end-to-end evaluation pipeline:
 PYTHONPATH=. pytest tests/test_yolo_sparsify.py
 
 # 2. Run full evaluation and report generation
-python3 examples/sparsify_yolo11x_coco.py --adapt_steps 25
+python3 experiments/yolo11_coco/sparsify_yolo11x_coco.py --adapt_steps 25
 ```
 
 ---

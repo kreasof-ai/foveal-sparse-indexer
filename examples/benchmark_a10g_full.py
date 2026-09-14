@@ -34,7 +34,7 @@ from foveal_indexer.triton_ops import (
     triton_fused_sram_indexer_attention,
     triton_block_sparse_linear,
 )
-from examples.train_cifar10_faster_and_better import (
+from experiments.cifar10.train_cifar10_faster_and_better import (
     DenseTokenformerBlock,
     FovealTokenformerBlock,
     DenseAttentionBlock,

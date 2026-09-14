@@ -47,5 +47,5 @@
 
 ```bash
 # Run end-to-end distillation and evaluation suite
-python3 examples/train_foveal_sparse_mlp.py --train_steps 200 --eval_samples 100
+python3 experiments/hy_mt2_legacy/train_foveal_sparse_mlp.py --train_steps 200 --eval_samples 100
 ```

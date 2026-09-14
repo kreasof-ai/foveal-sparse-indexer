@@ -76,23 +76,42 @@ foveal-sparse-indexer/
 │   ├── test_sparsify.py           # Offline SVD router and ViT sparsification tests
 │   └── test_yolo_sparsify.py      # Unit tests for YOLO11 Foveal attention and SVD compression
 ├── examples/
-│   ├── train_foveal_pattention_speedrun.py # [MAIN LLM] Full Pattention distillation & evaluation
-│   ├── benchmark_triton_pattention.py     # Triton Pattention hardware benchmark
 │   ├── demo_mnist_vit.py                  # MNIST ViT comparison (Dense vs Foveal Sparse)
 │   ├── demo_attention_flat_decode.py      # Flat decoding latency benchmark (CPU)
 │   ├── demo_tokenformer_training.py       # Dual-gradient Tokenformer training (CPU)
 │   ├── demo_block_matmul.py               # Blockwise sparse GEMM & FLOP reduction (CPU)
+│   ├── demo_gpu_benchmarks.py             # GPU benchmark suite
+│   ├── benchmark_a10g_full.py             # Full NVIDIA A10G benchmark suite
 │   ├── benchmark_all.py                   # Multi-domain CPU benchmark suite
+│   ├── benchmark_memory_scaling.py        # Peak VRAM parameter scaling benchmark
 │   ├── benchmark_sparse_matmul.py         # Dedicated Sparse vs Dense MatMul scaling
-│   ├── sparsify_timm_imagenet.py          # ImageNet-1k ViT sparsification with SVD router
-│   └── sparsify_yolo11x_coco.py           # YOLO11x 4x sparsification on COCO val2017
-├── archive/
-│   └── hy_mt2_legacy/             # Archived legacy experiments (layer pruning, skip, dense slicing)
-├── FOVEAL_PATTENTION_SPEEDRUN_REPORT.md   # [MAIN LLM] Official Foveal Pattention Speedrun report
-├── YOLO11X_SPARSIFICATION_REPORT.md       # Official YOLO11x 4x speedup & >95% mAP retention report
-├── SPARSIFICATION_REPORT.md               # Timm ViT sparsification report
-├── BENCHMARKS.md                  # Full performance reports and audit logs
-├── run_tests.py                   # Test discovery runner
+│   └── benchmark_high_sparsity_scaling.py # High-sparsity scaling benchmark
+├── experiments/                           # [EXPERIMENTS & REPORTS] Domain-organized sparsification
+│   ├── README.md                          # Catalog of experiments and reproduction commands
+│   ├── llm_pattention/                    # [MAIN LLM] Foveal Pattention speedrun & Triton kernel
+│   │   ├── train_foveal_pattention_speedrun.py
+│   │   ├── benchmark_triton_pattention.py
+│   │   └── FOVEAL_PATTENTION_SPEEDRUN_REPORT.md
+│   ├── yolo11_coco/                       # YOLO11 real-time detection sparsification
+│   │   ├── sparsify_yolo11x_coco.py
+│   │   └── YOLO11X_SPARSIFICATION_REPORT.md
+│   ├── vit_imagenet/                      # Vision Transformer ImageNet sparsification
+│   │   ├── sparsify_timm_imagenet.py
+│   │   ├── evaluate_all_50k_imagenet.py
+│   │   ├── SPARSIFICATION_REPORT.md
+│   │   └── IMAGENET_50K_REPORT.md
+│   ├── cifar10/                           # CIFAR-10 training & speedrun comparisons
+│   │   ├── speedrun_cifar10_dense_vs_sparse.py
+│   │   ├── train_cifar10_faster_and_better.py
+│   │   ├── train_cifar10_10m.py
+│   │   └── SPEEDRUN_REPORT.md
+│   └── hy_mt2_legacy/                     # Archived exploratory sparsification methods
+│       ├── sparsify_hy_mt2.py
+│       ├── train_foveal_dynamic_skip.py
+│       ├── train_foveal_sparse_mlp.py
+│       └── train_pattention_all_layers.py
+├── BENCHMARKS.md                          # Full performance reports and audit logs
+├── run_tests.py                           # Test discovery runner
 └── README.md
 ```
 
@@ -171,17 +190,17 @@ test_tokenformer_linear (test_tokenformer.TestFovealTokenformer) ... ok
 Ran 10 tests in 0.110s - OK
 ```
 
-### Running Demonstrations
+### Running Demonstrations & Experiments
 
 1. **Faster AND More Accurate Sparse CIFAR-10 Demonstration:**
    ```bash
-   python examples/train_cifar10_faster_and_better.py --regime tokenformer --epochs 4
+   python experiments/cifar10/train_cifar10_faster_and_better.py --regime tokenformer --epochs 4
    ```
    Directly demonstrates end-to-end training and inference where Foveal Sparse is **1.29× faster in training, 1.85× faster in inference, and achieves +4.20% higher test accuracy** on CIFAR-10 with **93.8% parameter sparsity**.
 
 2. **Full CIFAR-10 Training Comparison: Dense ViT (~10M) vs Foveal Sparse ViT (>90% Sparsity):**
    ```bash
-   python examples/train_cifar10_10m.py --epochs 5 --batch-size 128
+   python experiments/cifar10/train_cifar10_10m.py --epochs 5 --batch-size 128
    ```
    Trains and evaluates ~10-11M parameter Vision Transformers on CIFAR-10 with >90% sparsity (95.3% attention sparsity and 91.7% MLP channel sparsity), tracking accuracy, loss, and inference forward pass throughput on T4 GPU.
 
@@ -232,6 +251,17 @@ Ran 10 tests in 0.110s - OK
    python examples/benchmark_all.py
    ```
    Runs the full benchmark suite across attention decoding, GEMM, and Tokenformer parameter scaling.
+
+---
+
+### Domain Sparsification Experiments
+
+Full domain-specific sparsification experiments, validation scorecards, and reproduction instructions are cataloged in [**`experiments/README.md`**](experiments/README.md):
+- **LLM Foveal Pattention Speedrun:** [`experiments/llm_pattention/`](experiments/llm_pattention/)
+- **YOLO11x Real-Time Detection on COCO:** [`experiments/yolo11_coco/`](experiments/yolo11_coco/)
+- **Vision Transformer on ImageNet-1k:** [`experiments/vit_imagenet/`](experiments/vit_imagenet/)
+- **CIFAR-10 Speedrun:** [`experiments/cifar10/`](experiments/cifar10/)
+- **Legacy Explorations:** [`experiments/hy_mt2_legacy/`](experiments/hy_mt2_legacy/)
 
 ---
 

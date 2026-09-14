@@ -20,7 +20,7 @@ This directory archives early exploratory sparsification methods on `tencent/Hy-
 
 ## Successor: Unified Foveal Pattention
 
-All experiments in this directory have been superseded by **Foveal Pattention Reparameterization** (`foveal_indexer/foveal_pattention.py`, `foveal_indexer/pattention_triton.py`, `examples/train_foveal_pattention_speedrun.py`), which combines:
+All experiments in this directory have been superseded by **Foveal Pattention Reparameterization** (`foveal_indexer/foveal_pattention.py`, `foveal_indexer/pattention_triton.py`, `experiments/llm_pattention/train_foveal_pattention_speedrun.py`), which combines:
 - SwiGLU MLP reparameterization into Token-Parameter Attention ($K_{\text{gate}}, K_{\text{up}}, V$) with 1.000000 fidelity
 - 64-token chunk blockwise sparsity (96 blocks)
 - Empirical offline SVD router initialization (0.0089 initial KL)

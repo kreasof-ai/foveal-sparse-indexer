@@ -19,7 +19,7 @@ import sys
 import time
 from typing import Dict, List, Tuple
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 import pyarrow.parquet as pq
 import torchvision.io as tvio
@@ -32,7 +32,7 @@ import timm
 from huggingface_hub import hf_hub_download
 
 from foveal_indexer.sparsify import SVDRouter, FovealSparsifiedModel, sparsify_vision_transformer
-from examples.sparsify_timm_imagenet import benchmark_throughput_and_latency, calibrate_svd_router_for_vit
+from experiments.vit_imagenet.sparsify_timm_imagenet import benchmark_throughput_and_latency, calibrate_svd_router_for_vit
 
 
 class FastParquetFileDataset(Dataset):
@@ -349,9 +349,10 @@ This report documents the rigorous full-dataset evaluation of sparsifying `eva02
 - **Foveal Sparse 50,000 Evaluation:** {sparse_eval_time:.1f}s ({50000/sparse_eval_time:.1f} img/s)
 - **Adaptation Duration:** {adapt_time:.2f}s ({steps} steps)
 """
-    with open("IMAGENET_50K_REPORT.md", "w") as f:
+    report_path = os.path.join(os.path.dirname(__file__), "IMAGENET_50K_REPORT.md")
+    with open(report_path, "w") as f:
         f.write(report)
-    print("\nReport saved to IMAGENET_50K_REPORT.md!")
+    print(f"\nReport saved to {report_path}!")
 
 
 if __name__ == "__main__":

@@ -7,9 +7,13 @@ Demonstrates:
 4. Dual-gradient training with additive stream + teacher distillation.
 """
 
+import os
+import sys
 import time
 import torch
 import torch.nn.functional as F
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from foveal_indexer.block_matmul import BlockSparseLinear
 

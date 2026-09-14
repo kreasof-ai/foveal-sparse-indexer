@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Dict, Any, Tuple
 
 # Add repository root to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 import torch
 import torch.nn as nn
@@ -384,12 +384,16 @@ To bridge this gap and achieve **>95% mAP retention** at **>4x speedup**, we dep
 
 
 def main():
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+    default_data = os.path.join(repo_root, "datasets", "coco_val.yaml")
+    default_report = os.path.join(os.path.dirname(__file__), "YOLO11X_SPARSIFICATION_REPORT.md")
+
     parser = argparse.ArgumentParser(description="YOLO11x Sparsification Benchmark on COCO")
-    parser.add_argument("--data", type=str, default="datasets/coco_val.yaml", help="Path to COCO data yaml")
+    parser.add_argument("--data", type=str, default=default_data, help="Path to COCO data yaml")
     parser.add_argument("--teacher", type=str, default="yolo11x.pt", help="Teacher model weights")
     parser.add_argument("--student", type=str, default="yolo11m.pt", help="Base student model weights")
     parser.add_argument("--adapt_steps", type=int, default=100, help="Distillation adaptation steps")
-    parser.add_argument("--output_report", type=str, default="YOLO11X_SPARSIFICATION_REPORT.md", help="Report path")
+    parser.add_argument("--output_report", type=str, default=default_report, help="Report path")
     args = parser.parse_args()
 
     print("=" * 80)

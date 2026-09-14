@@ -48,5 +48,5 @@
 
 ```bash
 # Run end-to-end dynamic skip distillation and evaluation
-python3 examples/train_foveal_dynamic_skip.py --train_steps 250 --eval_samples 100
+python3 experiments/hy_mt2_legacy/train_foveal_dynamic_skip.py --train_steps 250 --eval_samples 100
 ```

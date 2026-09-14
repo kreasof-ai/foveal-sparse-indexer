@@ -17,7 +17,7 @@ import copy
 import argparse
 from typing import Optional, Tuple, Dict, Any, List
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 import sacrebleu
 import torch
@@ -209,7 +209,8 @@ def main():
     parser.add_argument("--lr", type=float, default=1.8e-4)
     parser.add_argument("--eval_interval", type=int, default=300)
     parser.add_argument("--num_layers", type=int, default=32, help="Number of layers to sparsify (e.g. 16, 24, 32)")
-    parser.add_argument("--output_checkpoint", type=str, default="checkpoints/foveal_pattention_best.pt")
+    default_ckpt = os.path.join(os.path.dirname(__file__), "checkpoints", "foveal_pattention_best.pt")
+    parser.add_argument("--output_checkpoint", type=str, default=default_ckpt)
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

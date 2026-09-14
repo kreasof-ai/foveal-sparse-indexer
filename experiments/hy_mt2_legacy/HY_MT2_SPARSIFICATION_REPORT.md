@@ -49,5 +49,5 @@
 
 ```bash
 # Run end-to-end evaluation (1,000 sentences) and report generation
-python3 examples/sparsify_hy_mt2.py --eval_samples 1000 --eval_batch_size 32 --adapt_samples 200 --adapt_steps 50
+python3 experiments/hy_mt2_legacy/sparsify_hy_mt2.py --eval_samples 1000 --eval_batch_size 32 --adapt_samples 200 --adapt_steps 50
 ```
