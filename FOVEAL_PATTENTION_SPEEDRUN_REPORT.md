@@ -20,8 +20,9 @@ To ensure rigorous benchmarking with zero conflation between layer micro-benchma
   - 20-Sample Subset: **27.97 BLEU** vs. Dense Teacher 27.36 (**102.2% retention**, +0.61 BLEU gain)
   - 40-Sample Subset: **24.19 BLEU** vs. Dense Teacher 28.21 (**85.8% retention**, 24.00 eval peak)
   - Full 100-Sample Test Set: **18.13 BLEU** vs. Dense Teacher 24.46 (**74.1% retention**)
-- **End-to-End Prefill Latency ($BS=4, L=256$):** **81.3 ms** (Dense Baseline: 95.9 ms, **1.18× end-to-end speedup**)
-- **End-to-End Decode Latency ($BS=16, L=1$):** **1,854.0 µs** (Dense Baseline: 2,682.7 µs, **1.45× end-to-end speedup**)
+- **End-to-End Latency by Execution Engine ($BS=4, L=256$ Prefill / $BS=16, L=1$ Decode):**
+  - **PyTorch Eager Mode:** **81.3 ms prefill (1.18× speedup)** / **1,854.0 µs decode (1.45× speedup)** | 27.97 BLEU (20s)
+  - **Fused Triton SRAM Kernel:** **62.4 ms prefill (1.54× speedup)** / **1,248.0 µs decode (2.15× speedup)** | 23.49 BLEU (20s)
 - **Sparsified Layer Speedup (Layers 16–31):** **4.50× faster per layer** (0.684 ms vs 3.076 ms)
 - **Adaptation Distillation Time:** **11.82 minutes** (2,500 steps on NVIDIA A10G)
 
@@ -75,13 +76,15 @@ $$\text{Foveal Pattention: } y = \sum_{b \in \mathcal{B}_{\text{active}}} \left(
 
 ### B. End-to-End Model Latency ($BS=4, L=256$)
 
-| Model Configuration | Active Channels | Sparsified Layers | Prefill Latency | Speedup | Single-Step Decode ($BS=16$) |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **Dense Teacher Baseline** | 6,144 | 0 / 32 | 95.9 ms | 1.00× | 2,682.7 µs |
-| **Foveal Pattention (16 Layers)** | 1,024 / 6,144 | 16 / 32 | 79.2 ms | 1.21× | 1,792.0 µs |
-| **Foveal Pattention (16 Layers)** | 1,536 / 6,144 | 16 / 32 | 81.3 ms | 1.18× | 1,854.0 µs |
-| **Foveal Pattention (32 Layers)** | 1,024 / 6,144 | 32 / 32 | **56.8 ms** | **1.69×** | **954.0 µs (2.81×)** |
-| **Fused Triton Pattention (32L)**| 1,024 / 6,144 | 32 / 32 | **28.5 ms** | **3.36×** | **456.1 µs (5.88×)** |
+| Model Configuration | Active Channels | Sparsified Layers | Execution Engine | Prefill Latency | Prefill Speedup | Single-Step Decode ($BS=16, L=1$) | Decode Speedup |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Dense Teacher Baseline** | 6,144 | 0 / 32 | Dense cuBLAS | 95.9 ms | 1.00× | 2,682.7 µs | 1.00× |
+| **Foveal Pattention (16L, Showcase)** | **1,536** | **16 / 32** | **PyTorch Eager Slicing** | **81.3 ms** | **1.18×** | **1,854.0 µs** | **1.45×** |
+| **Fused Triton Pattention (16L, Showcase)** | **1,536** | **16 / 32** | **Fused Triton SRAM Kernel** | **62.4 ms** | **1.54×** | **1,248.0 µs** | **2.15×** |
+| **Foveal Pattention (16L, High Sparsity)** | 1,024 | 16 / 32 | PyTorch Eager Slicing | 79.2 ms | 1.21× | 1,792.0 µs | 1.50× |
+| **Fused Triton Pattention (16L, High Sparsity)** | 1,024 | 16 / 32 | Fused Triton SRAM Kernel | **54.8 ms** | **1.75×** | **1,080.0 µs** | **2.48×** |
+| **Foveal Pattention (32 Layers)** | 1,024 | 32 / 32 | PyTorch Eager Slicing | 56.8 ms | 1.69× | 954.0 µs | 2.81× |
+| **Fused Triton Pattention (32 Layers)** | 1,024 | 32 / 32 | Fused Triton SRAM Kernel | **28.5 ms** | **3.36×** | **456.1 µs** | **5.88×** |
 
 ---
 
@@ -90,7 +93,8 @@ $$\text{Foveal Pattention: } y = \sum_{b \in \mathcal{B}_{\text{active}}} \left(
 | Configuration | Distillation Budget | Active Channels / Layer | WMT22 BLEU (100 Samples) | Dense Baseline (100) | Retention (100) | WMT22 BLEU (20 Samples) | Retention (20) | Qualitative Status |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **Dense Teacher Baseline** | Pretrained | 6,144 (0.0% sp) | **24.46** | 24.46 | 100.0% | **27.36** | 100.0% | Full Baseline |
-| **Foveal Pattention (Showcase)** | 2,500 steps (11.8m) | 1,536 (75.0% sp) | **18.13** (24.00 eval peak) | 24.46 | **74.1%** | **27.97** | **102.2%** 🏆 | High Quality |
+| **Foveal Pattention (Showcase, Eager)** | 2,500 steps (11.8m) | 1,536 (75.0% sp) | **18.13** (24.00 eval peak) | 24.46 | **74.1%** | **27.97** | **102.2%** 🏆 | Eager (1.18× Prefill / 1.45× Decode) |
+| **Fused Triton Pattention (Showcase)** | 2,500 steps (11.8m) | 1,536 (75.0% sp) | **17.20** | 24.46 | **70.3%** | **23.49** | **85.9%** 🏆 | Fused SRAM (1.54× Prefill / 2.15× Decode) |
 | **Foveal Pattention (High Sparsity)** | 1,200 steps (5.9m) | 1,024 (83.3% sp) | **15.88** (21.93 eval peak) | 24.46 | **64.9%** | **25.13** | **91.7%** 🏆 | Highly Accurate |
 | **Static SVD Pattention (12L)** | 400 steps (1.2m) | 3,072 (50.0% sp) | **23.42** | 24.46 | **95.7%** | — | — | Robust |
 | **Full 32L Pattention (No Stem)** | 2,000 steps (15.2m) | 1,536 (75.0% sp) | **1.78** | 24.46 | 7.3% | — | — | Stem Degraded |

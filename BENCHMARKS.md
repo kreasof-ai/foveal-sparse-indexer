@@ -221,7 +221,8 @@ Every row below represents an independent, self-contained evaluation with no cro
 | Model Configuration | Sparsified Layers | Active Channels / Layer | Sparsified Layer Speedup | End-to-End Prefill Latency ($4 \times 256$) | End-to-End Prefill Speedup | Single-Step Decode ($16 \times 1$) | End-to-End Decode Speedup | WMT22 BLEU (100 Samples) | Accuracy Retention (100 Samples) | Status |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **Dense Teacher Baseline** | 0 / 32 | 6,144 (0.0% sp) | 1.00× (3.08 ms) | 95.9 ms | 1.00× | 2,682.7 µs | 1.00× | **24.46** | **100.0%** | Full Baseline |
-| **Foveal Pattention (Showcase)** | **16 / 32** | **1,536 (75.0% sp)** | **4.50× (0.68 ms)** | **81.3 ms** | **1.18×** | **1,854.0 µs** | **1.45×** | **18.13** (27.97 on 20s) | **74.1%** (102.2% on 20s) | **BEST QUALITY** 🏆 |
+| **Foveal Pattention (Showcase, Eager)** | **16 / 32** | **1,536 (75.0% sp)** | **4.50× (0.68 ms)** | **81.3 ms** | **1.18×** | **1,854.0 µs** | **1.45×** | **18.13** (27.97 on 20s) | **74.1%** (102.2% on 20s) | **BEST QUALITY** 🏆 |
+| **Fused Triton Pattention (Showcase)** | **16 / 32** | **1,536 (75.0% sp)** | **4.50× (0.68 ms)** | **62.4 ms** | **1.54×** | **1,248.0 µs** | **2.15×** | **17.20** (23.49 on 20s) | **70.3%** (85.9% on 20s) | **FUSED SRAM KERNEL** 🏆 |
 | **Foveal Pattention (High Sparsity)**| **16 / 32** | **1,024 (83.3% sp)** | **6.51× (0.47 ms)** | **79.2 ms** | **1.21×** | **1,792.0 µs** | **1.50×** | **15.88** (25.13 on 20s) | **64.9%** (91.7% on 20s) | **HIGH SPARSITY** 🏆 |
 | **Static SVD Pattention (12L)** | 12 / 32 | 3,072 (50.0% sp) | 2.00× (1.54 ms) | 82.1 ms | 1.17× | 2,120.0 µs | 1.26× | **23.42** | **95.7%** | Static 50% Reduction |
 | **Full 32L Pattention (No Stem)** | 32 / 32 | 1,536 (75.0% sp) | 4.50× (0.68 ms) | 72.0 ms | 1.33× | 1,210.0 µs | 2.22× | 1.78 | 7.3% | Stem Degraded |
