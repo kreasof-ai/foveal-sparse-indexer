@@ -89,6 +89,15 @@ class BlockSparseLinear(nn.Module):
         nn.init.normal_(self.weight_to_v.weight, std=in_features ** -0.5)
         nn.init.normal_(self.indexer.out_proj.weight, std=1e-3)
 
+        # Cached block keys and values for inference
+        self._cached_kp: Optional[Tensor] = None
+        self._cached_vp: Optional[Tensor] = None
+
+    def refresh_block_cache(self) -> None:
+        """Update cached 16D representations for weight blocks."""
+        with torch.no_grad():
+            self._cached_kp, self._cached_vp = self.get_block_keys_and_values()
+
     def reset_parameters(self) -> None:
         nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
         if self.bias is not None:
@@ -140,8 +149,13 @@ class BlockSparseLinear(nn.Module):
         x_detach = x.detach()
         q_16d = self.indexer.compute_query_16d(x_detach)  # (B, T, index_dim)
 
-        # 2. 16D keys and values for weight blocks
-        kp_16d, vp_16d = self.get_block_keys_and_values()  # (1, num_blocks, index_dim)
+        # 2. 16D keys and values for weight blocks (use cache during eval if available)
+        if not self.training and self._cached_kp is not None:
+            kp_16d, vp_16d = self._cached_kp, self._cached_vp
+        else:
+            kp_16d, vp_16d = self.get_block_keys_and_values()
+            if not self.training:
+                self._cached_kp, self._cached_vp = kp_16d, vp_16d
         kp_16d = kp_16d.expand(batch, -1, -1)
         vp_16d = vp_16d.expand(batch, -1, -1)
 
@@ -168,14 +182,9 @@ class BlockSparseLinear(nn.Module):
         active_block_indices = torch.where(active_block_mask)[0]
         num_active = len(active_block_indices)
 
-        # Gather active slices of weight
-        # Construct index tensor of active output channels
-        active_channels = []
-        for b_idx in active_block_indices.tolist():
-            start = b_idx * self.block_size
-            active_channels.extend(range(start, start + self.block_size))
-        active_chan_idx = torch.tensor(active_channels, device=device, dtype=torch.long)
-
+        # Fast vectorized active channel gathering (zero Python loops)
+        offsets = torch.arange(self.block_size, device=device)
+        active_chan_idx = (active_block_indices.view(-1, 1) * self.block_size + offsets).flatten()
         active_w = self.weight[active_chan_idx]  # (N_active, in_features)
 
         # Compute active GEMM: (B, T, in_features) @ (in_features, N_active) -> (B, T, N_active)

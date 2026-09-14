@@ -88,6 +88,14 @@ class FovealTokenformerLinear(nn.Module):
         self.indexer.out_proj = nn.Linear(index_dim, out_features, bias=False)
         nn.init.normal_(self.indexer.out_proj.weight, std=1e-3)
 
+        self._cached_kp: Optional[Tensor] = None
+        self._cached_vp: Optional[Tensor] = None
+
+    def refresh_param_cache(self) -> None:
+        """Update cached 16D representations for parameter blocks."""
+        with torch.no_grad():
+            self._cached_kp, self._cached_vp = self.indexer.compute_kv_blocks_16d(self.k_param.detach())
+
     def _activate_scores(self, scores: Tensor) -> Tensor:
         """Apply attention activation function."""
         if self.activation == "softmax":
@@ -140,8 +148,12 @@ class FovealTokenformerLinear(nn.Module):
         q_16d = self.indexer.compute_query_16d(x_detach)  # (B, T, 16)
 
         # 2. 16D Indexer representation of parameter blocks
-        # Parameter tokens are (num_param_tokens, D)
-        kp_16d, vp_16d = self.indexer.compute_kv_blocks_16d(self.k_param.detach()) # (1, num_blocks, 16)
+        if not self.training and self._cached_kp is not None:
+            kp_16d, vp_16d = self._cached_kp, self._cached_vp
+        else:
+            kp_16d, vp_16d = self.indexer.compute_kv_blocks_16d(self.k_param.detach())
+            if not self.training:
+                self._cached_kp, self._cached_vp = kp_16d, vp_16d
         kp_16d = kp_16d.expand(batch, -1, -1)
         vp_16d = vp_16d.expand(batch, -1, -1)
 
@@ -173,14 +185,8 @@ class FovealTokenformerLinear(nn.Module):
         valid_remote = torch.unique(selected_remote[selected_remote >= self.base_blocks])
 
         if valid_remote.numel() > 0:
-            # Gather parameter weights for selected remote blocks
-            # Each block has param_block_size tokens
-            remote_token_indices = []
-            for b_idx in valid_remote.tolist():
-                start = b_idx * self.param_block_size
-                remote_token_indices.extend(range(start, start + self.param_block_size))
-            remote_token_idx = torch.tensor(remote_token_indices, device=device, dtype=torch.long)
-
+            offsets = torch.arange(self.param_block_size, device=device)
+            remote_token_idx = (valid_remote.view(-1, 1) * self.param_block_size + offsets).flatten()
             remote_k = self.k_param[remote_token_idx]  # (N_remote_active, D_in)
             remote_v = self.v_param[remote_token_idx]  # (N_remote_active, D_out)
 
