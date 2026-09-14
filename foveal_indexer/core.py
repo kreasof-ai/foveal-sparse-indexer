@@ -262,7 +262,7 @@ class FovealIndexer(nn.Module):
         """
         q_norm = F.normalize(q_blocks.float(), dim=-1).to(q_blocks.dtype)
         k_norm = F.normalize(k_blocks.float(), dim=-1).to(k_blocks.dtype)
-        scores = torch.einsum("bqr,bpr->bqp", q_norm, k_norm) / math.sqrt(self.index_dim)
+        scores = torch.bmm(q_norm, k_norm.transpose(-2, -1)) / math.sqrt(self.index_dim)
         return scores
 
     def route(
@@ -307,10 +307,10 @@ class FovealIndexer(nn.Module):
         ).to(v_blocks.dtype)
 
         # context: (B, query_blocks, index_dim)
-        context = torch.einsum("bqp,bpr->bqr", probs, v_blocks)
-        # Expand each query block's context across its constituent elements
-        context_expanded = context.repeat_interleave(self.block_size, dim=1)
-        return self.out_proj(context_expanded)
+        context = torch.bmm(probs, v_blocks)
+        # Efficient projection before expanding across constituent elements
+        out_blocks = self.out_proj(context)
+        return out_blocks.repeat_interleave(self.block_size, dim=1)
 
     def distillation_loss(
         self,

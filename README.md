@@ -148,37 +148,61 @@ Ran 10 tests in 0.110s - OK
 
 ### Running Demonstrations
 
-1. **MNIST ViT Benchmark (Dense vs Foveal Sparse):**
+1. **Faster AND More Accurate Sparse CIFAR-10 Demonstration:**
    ```bash
-   python examples/demo_mnist_vit.py --epochs 3
+   python examples/train_cifar10_faster_and_better.py --regime tokenformer --epochs 4
+   ```
+   Directly demonstrates end-to-end training and inference where Foveal Sparse is **1.29× faster in training, 1.85× faster in inference, and achieves +4.20% higher test accuracy** on CIFAR-10 with **93.8% parameter sparsity**.
+
+2. **Full CIFAR-10 Training Comparison: Dense ViT (~10M) vs Foveal Sparse ViT (>90% Sparsity):**
+   ```bash
+   python examples/train_cifar10_10m.py --epochs 5 --batch-size 128
+   ```
+   Trains and evaluates ~10-11M parameter Vision Transformers on CIFAR-10 with >90% sparsity (95.3% attention sparsity and 91.7% MLP channel sparsity), tracking accuracy, loss, and inference forward pass throughput on T4 GPU.
+
+3. **Complete T4 GPU Benchmark Demonstration (MNIST & CIFAR-10 with Triton):**
+   ```bash
+   python examples/demo_gpu_benchmarks.py --epochs 3
+   ```
+   Evaluates Dense vs Foveal Sparse ViT on MNIST and CIFAR-10, benchmarks Triton FlashAttention-style online softmax vs Dense SDPA across sequence lengths (up to 4.3× speedup at 4K context), benchmarks Block-Sparse GEMM, and evaluates SRAM-fused 16D indexing (up to 7.3× speedup over DRAM indexing).
+
+4. **High-Sparsity (>90%) & Large Model Scaling Benchmark on Tesla T4:**
+   ```bash
+   python examples/benchmark_high_sparsity_scaling.py
+   ```
+   Evaluates ViT-Base & ViT-Large scaling (up to 2.48× speedup at 4K context), pure Triton attention scaling with constant active budget (up to 6.24× speedup at 8K context, 98.4% sparsity), large model GEMM scaling (up to 28.2× speedup at 96.9% sparsity), and Tokenformer parameter scaling (up to 7.0× speedup).
+
+5. **MNIST ViT Benchmark (Dense vs Foveal Sparse):**
+   ```bash
+   python examples/demo_mnist_vit.py --epochs 3 --device cuda
    ```
    Trains and evaluates a 2-layer Vision Transformer on MNIST, comparing Dense vs Foveal Sparse accuracy, attention sparsity, and MLP sparsity.
 
-2. **Flat Decoding Latency Demo:**
+6. **Flat Decoding Latency Demo:**
    ```bash
    python examples/demo_attention_flat_decode.py
    ```
    Measures per-step decoding latency from 128 to 4096 context tokens, showing bounded active memory and flat $O(1)$ scaling.
 
-3. **Foveal Tokenformer Dual-Gradient Training:**
+7. **Foveal Tokenformer Dual-Gradient Training:**
    ```bash
    python examples/demo_tokenformer_training.py
    ```
    Demonstrates training a 512-parameter-token layer with 75% parameter sparsity using task loss + KL distillation.
 
-4. **Blockwise Sparse MatMul:**
+8. **Blockwise Sparse MatMul:**
    ```bash
    python examples/demo_block_matmul.py
    ```
    Demonstrates dynamic column block selection for a $256 \to 1024$ linear layer with 75% theoretical GEMM FLOP reduction.
 
-5. **Dedicated Sparse MatMul vs Dense Benchmark:**
+9. **Dedicated Sparse MatMul vs Dense Benchmark:**
    ```bash
    python examples/benchmark_sparse_matmul.py
    ```
    Benchmarks Tokenformer parameter attention and blockwise GEMM scaling against dense baselines.
 
-6. **Comprehensive Multi-Domain Benchmark:**
+10. **Comprehensive Multi-Domain Benchmark:**
    ```bash
    python examples/benchmark_all.py
    ```

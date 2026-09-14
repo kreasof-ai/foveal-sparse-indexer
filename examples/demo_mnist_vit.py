@@ -9,9 +9,15 @@ Demonstrates:
 4. Validation accuracy, compute sparsity, and training throughput.
 """
 
+import os
+import sys
 import time
 import argparse
 from typing import Tuple, Dict, Any
+
+# Ensure project root is in sys.path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -50,9 +56,15 @@ def get_mnist_loaders(batch_size: int = 64, train_samples: int = 600, test_sampl
         test_ds = torch.utils.data.TensorDataset(x_test, y_test)
         return DataLoader(train_ds, batch_size=batch_size, shuffle=True), DataLoader(test_ds, batch_size=batch_size)
 
-    # Subsets for fast, reproducible CPU demonstration
-    train_subset = Subset(train_ds, range(min(train_samples, len(train_ds))))
-    test_subset = Subset(test_ds, range(min(test_samples, len(test_ds))))
+    # Subsets for fast, reproducible demonstration
+    n_train = min(train_samples, len(train_ds))
+    n_test = min(test_samples, len(test_ds))
+    g = torch.Generator().manual_seed(42)
+    train_indices = torch.randperm(len(train_ds), generator=g)[:n_train].tolist()
+    test_indices = torch.randperm(len(test_ds), generator=g)[:n_test].tolist()
+
+    train_subset = Subset(train_ds, train_indices)
+    test_subset = Subset(test_ds, test_indices)
 
     train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_subset, batch_size=batch_size, shuffle=False)
@@ -186,47 +198,60 @@ def profile_inference(dense_model: nn.Module, foveal_model: nn.Module, device: t
     # 1. Batched Inference (Batch=64)
     x_batch = torch.randn(64, 1, 32, 32, device=device)
 
-    # Warmup
-    for _ in range(5):
-        _ = dense_model(x_batch)
-        _ = foveal_model(x_batch)
+    with torch.no_grad():
+        # Warmup
+        for _ in range(10):
+            _ = dense_model(x_batch)
+            _ = foveal_model(x_batch)
+        if device.type == "cuda":
+            torch.cuda.synchronize()
 
-    reps = 30
-    t0 = time.perf_counter()
-    for _ in range(reps):
-        _ = dense_model(x_batch)
-    d_batch_ms = (time.perf_counter() - t0) * 1000.0 / reps
+        reps = 50
+        t0 = time.perf_counter()
+        for _ in range(reps):
+            _ = dense_model(x_batch)
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        d_batch_ms = (time.perf_counter() - t0) * 1000.0 / reps
 
-    t0 = time.perf_counter()
-    for _ in range(reps):
-        _ = foveal_model(x_batch)
-    f_batch_ms = (time.perf_counter() - t0) * 1000.0 / reps
+        t0 = time.perf_counter()
+        for _ in range(reps):
+            _ = foveal_model(x_batch)
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        f_batch_ms = (time.perf_counter() - t0) * 1000.0 / reps
 
-    d_batch_fps = (64 * 1000.0) / d_batch_ms
-    f_batch_fps = (64 * 1000.0) / f_batch_ms
+        d_batch_fps = (64 * 1000.0) / d_batch_ms
+        f_batch_fps = (64 * 1000.0) / f_batch_ms
 
-    # 2. Single Image Inference (Batch=1)
-    x_single = torch.randn(1, 1, 32, 32, device=device)
-    for _ in range(10):
-        _ = dense_model(x_single)
-        _ = foveal_model(x_single)
+        # 2. Single Image Inference (Batch=1)
+        x_single = torch.randn(1, 1, 32, 32, device=device)
+        for _ in range(10):
+            _ = dense_model(x_single)
+            _ = foveal_model(x_single)
+        if device.type == "cuda":
+            torch.cuda.synchronize()
 
-    reps_single = 60
-    t0 = time.perf_counter()
-    for _ in range(reps_single):
-        _ = dense_model(x_single)
-    d_single_ms = (time.perf_counter() - t0) * 1000.0 / reps_single
+        reps_single = 100
+        t0 = time.perf_counter()
+        for _ in range(reps_single):
+            _ = dense_model(x_single)
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        d_single_ms = (time.perf_counter() - t0) * 1000.0 / reps_single
 
-    t0 = time.perf_counter()
-    for _ in range(reps_single):
-        _ = foveal_model(x_single)
-    f_single_ms = (time.perf_counter() - t0) * 1000.0 / reps_single
+        t0 = time.perf_counter()
+        for _ in range(reps_single):
+            _ = foveal_model(x_single)
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        f_single_ms = (time.perf_counter() - t0) * 1000.0 / reps_single
 
-    d_single_fps = 1000.0 / d_single_ms
-    f_single_fps = 1000.0 / f_single_ms
+        d_single_fps = 1000.0 / d_single_ms
+        f_single_fps = 1000.0 / f_single_ms
 
-    # Compute Sparsity Profile
-    _, aux = foveal_model(x_batch)
+        # Compute Sparsity Profile
+        _, aux = foveal_model(x_batch)
     attn_sp = aux["mean_attn_sparsity"] * 100.0
     mlp_sp = aux["mean_mlp_sparsity"] * 100.0
 
@@ -248,15 +273,23 @@ def main():
     parser.add_argument("--train-samples", type=int, default=600, help="Training samples for CPU demo")
     parser.add_argument("--test-samples", type=int, default=150, help="Test samples for CPU demo")
     parser.add_argument("--teacher-interval", type=int, default=10, help="Distillation frequency (steps)")
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda" if torch.cuda.is_available() else "cpu",
+        help="Device to run on (cuda or cpu)",
+    )
     args = parser.parse_args()
 
+    device = torch.device(args.device)
+    device_name = torch.cuda.get_device_name(0) if device.type == "cuda" else "CPU"
+
     print("=" * 82)
-    print("  MNIST Benchmark: Dense ViT vs Foveal Sparse ViT on CPU")
+    print(f"  MNIST Benchmark: Dense ViT vs Foveal Sparse ViT on {device_name}")
     print("=" * 82)
     print("Architecture: 2-layer ViT, 4 heads, embed_dim=64, mlp_dim=128, 64 patches (4x4)")
     print(f"Dataset: {args.train_samples} train samples, {args.test_samples} test samples")
 
-    device = torch.device("cpu")
     torch.manual_seed(42)
 
     train_loader, test_loader = get_mnist_loaders(

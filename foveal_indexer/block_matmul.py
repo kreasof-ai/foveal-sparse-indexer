@@ -20,6 +20,7 @@ from torch import Tensor, nn
 import torch.nn.functional as F
 
 from .core import FovealIndexer, Route
+from .triton_ops import is_triton_available, triton_block_sparse_linear
 
 
 class BlockSparseLinear(nn.Module):
@@ -122,8 +123,8 @@ class BlockSparseLinear(nn.Module):
         k_blocks = k_elem.mean(dim=1, keepdim=True)  # (num_blocks, 1, index_dim)
         v_blocks = v_elem.mean(dim=1, keepdim=True)  # (num_blocks, 1, index_dim)
 
-        k_blocks = F.normalize(k_blocks.squeeze(1).float(), dim=-1).unsqueeze(0)  # (1, num_blocks, index_dim)
-        v_blocks = v_blocks.squeeze(1).unsqueeze(0)  # (1, num_blocks, index_dim)
+        k_blocks = F.normalize(k_blocks.squeeze(1).float(), dim=-1).to(self.weight.dtype).unsqueeze(0)  # (1, num_blocks, index_dim)
+        v_blocks = v_blocks.squeeze(1).to(self.weight.dtype).unsqueeze(0)  # (1, num_blocks, index_dim)
 
         return k_blocks, v_blocks
 
@@ -162,59 +163,106 @@ class BlockSparseLinear(nn.Module):
         # 3. Block scores
         block_scores = self.indexer.compute_block_scores(q_16d, kp_16d)  # (B, T, num_blocks)
 
-        # 4. Route blocks
-        route = self.indexer.route(block_scores)
+        # 4 & 5. Route blocks and determine active blocks
+        if not self.training and not torch.is_grad_enabled():
+            # Fast vectorized selection for inference without slow routing object creation
+            remote_scores = block_scores[..., self.base_blocks:]
+            if remote_scores.shape[-1] > 0:
+                probs = F.softmax(remote_scores, dim=-1)
+                sorted_probs, sorted_idx = probs.sort(dim=-1, descending=True)
+                cum = sorted_probs.cumsum(dim=-1)
+                needed = torch.clamp((cum < self.indexer.top_p).sum(dim=-1) + 1, 0, self.indexer.max_remote_blocks)
+                slot_idx = torch.arange(sorted_idx.shape[-1], device=device).view(1, 1, -1)
+                valid_slots = slot_idx < needed.unsqueeze(-1)
+                selected_remote = sorted_idx[valid_slots] + self.base_blocks
+                active_block_mask = torch.zeros(self.num_blocks, dtype=torch.bool, device=device)
+                active_block_mask[: self.base_blocks] = True
+                if selected_remote.numel() > 0:
+                    active_block_mask[selected_remote.long()] = True
+            else:
+                active_block_mask = torch.zeros(self.num_blocks, dtype=torch.bool, device=device)
+                active_block_mask[: self.base_blocks] = True
+            active_block_indices = torch.where(active_block_mask)[0]
+            num_active = len(active_block_indices)
+            route = None
+        else:
+            # Full Route construction for training and gradient tracking
+            route = self.indexer.route(block_scores)
 
-        # 5. Sparse MatMul Execution
-        # Base blocks: [0, base_blocks)
-        active_block_mask = torch.zeros(self.num_blocks, dtype=torch.bool, device=device)
-        active_block_mask[: self.base_blocks] = True
+            active_block_mask = torch.zeros(self.num_blocks, dtype=torch.bool, device=device)
+            active_block_mask[: self.base_blocks] = True
 
-        # Mark remote blocks selected across the batch (respecting remote_counts)
-        capacity = route.remote_indices.shape[-1]
-        slot_idx = torch.arange(capacity, device=device).view(1, 1, capacity)
-        valid_slots = slot_idx < route.remote_counts[..., None]
-        selected_remote = route.remote_indices[valid_slots]
-        selected_remote = selected_remote[selected_remote >= self.base_blocks]
-        if selected_remote.numel() > 0:
-            active_block_mask[selected_remote.long()] = True
+            capacity = route.remote_indices.shape[-1]
+            slot_idx = torch.arange(capacity, device=device).view(1, 1, capacity)
+            valid_slots = slot_idx < route.remote_counts[..., None]
+            selected_remote = route.remote_indices[valid_slots]
+            selected_remote = selected_remote[selected_remote >= self.base_blocks]
+            if selected_remote.numel() > 0:
+                active_block_mask[selected_remote.long()] = True
 
-        active_block_indices = torch.where(active_block_mask)[0]
-        num_active = len(active_block_indices)
+            active_block_indices = torch.where(active_block_mask)[0]
+            num_active = len(active_block_indices)
 
-        # Fast vectorized active channel gathering (zero Python loops)
-        offsets = torch.arange(self.block_size, device=device)
-        active_chan_idx = (active_block_indices.view(-1, 1) * self.block_size + offsets).flatten()
-        active_w = self.weight[active_chan_idx]  # (N_active, in_features)
+        use_triton_linear = (
+            device.type == "cuda"
+            and is_triton_available()
+            and (not torch.is_grad_enabled() or not self.training)
+            and x.dtype in (torch.float16, torch.bfloat16, torch.float32)
+            and in_feat <= 128
+            and self.num_blocks <= 4
+        )
 
-        # Compute active GEMM: (B, T, in_features) @ (in_features, N_active) -> (B, T, N_active)
-        active_out = F.linear(x, active_w, None)
+        if use_triton_linear:
+            x_flat = x.reshape(batch * seq_len, in_feat)
+            out_flat = triton_block_sparse_linear(
+                x_flat, self.weight, self.bias, active_block_indices, block_size=self.block_size
+            )
+            out = out_flat.view(batch, seq_len, self.out_features)
+        else:
+            # Fast vectorized active channel gathering (zero Python loops)
+            offsets = torch.arange(self.block_size, device=device)
+            active_chan_idx = (active_block_indices.view(-1, 1) * self.block_size + offsets).flatten()
+            active_w = self.weight[active_chan_idx]  # (N_active, in_features)
 
-        # Scatter active output into full output tensor
-        out = torch.zeros(batch, seq_len, self.out_features, device=device, dtype=x.dtype)
-        out[:, :, active_chan_idx] = active_out
+            # Compute active GEMM: (B, T, in_features) @ (in_features, N_active) -> (B, T, N_active)
+            active_out = F.linear(x, active_w, None)
 
-        if self.bias is not None:
-            out[:, :, active_chan_idx] = out[:, :, active_chan_idx] + self.bias[active_chan_idx]
+            # Scatter active output into full output tensor
+            out = torch.zeros(batch, seq_len, self.out_features, device=device, dtype=active_out.dtype)
+            out[:, :, active_chan_idx] = active_out
+
+            if self.bias is not None:
+                bias_slice = self.bias[active_chan_idx].to(out.dtype)
+                out[:, :, active_chan_idx] = out[:, :, active_chan_idx] + bias_slice
 
         # 6. Additive 16D stream
         additive_out = None
         if self.use_additive_stream:
             probs = F.softmax(block_scores, dim=-1).to(vp_16d.dtype)
-            context = torch.einsum("btp,bpr->btr", probs, vp_16d)
-            additive_out = self.indexer.out_proj(context)
+            context = torch.bmm(probs, vp_16d)
+            additive_out = self.indexer.out_proj(context).to(out.dtype)
             out = out + additive_out
 
         if orig_ndim == 2:
             out = out.squeeze(1)
 
+        if route is not None:
+            mean_remote = route.mean_remote_blocks.item()
+        elif "needed" in locals():
+            mean_remote = needed.float().mean().item()
+        else:
+            mean_remote = 0.0
+
+        mean_active = self.base_blocks + mean_remote
+        sparsity = 1.0 - (mean_active / self.num_blocks)
+
         aux: Dict[str, Any] = {
             "route": route,
             "additive_out": additive_out,
             "active_blocks_union": num_active,
-            "mean_active_blocks": self.base_blocks + route.mean_remote_blocks.item(),
+            "mean_active_blocks": mean_active,
             "total_blocks": self.num_blocks,
-            "sparsity": 1.0 - ((self.base_blocks + route.mean_remote_blocks.item()) / self.num_blocks),
+            "sparsity": sparsity,
             "distill_loss": torch.tensor(0.0, device=device),
         }
 

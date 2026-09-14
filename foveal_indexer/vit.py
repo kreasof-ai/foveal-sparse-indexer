@@ -11,6 +11,11 @@ import torch.nn.functional as F
 
 from .core import FovealIndexer, masked_softmax
 from .block_matmul import BlockSparseLinear
+from .triton_ops import (
+    is_triton_available,
+    triton_foveal_sparse_attention,
+    triton_fused_sram_indexer_attention,
+)
 
 
 class PatchEmbedding(nn.Module):
@@ -97,36 +102,58 @@ class FovealVisionAttention(nn.Module):
         qb = qi[:, :: self.block_size]
         scores = self.indexer.compute_block_scores(qb, kp)  # (B, num_blocks, num_blocks)
 
-        # Self-block is unconditionally attended to as base local context
-        eye_mask = torch.eye(num_blocks, dtype=torch.bool, device=device)[None].expand(batch, -1, -1)
-        remote_scores = scores.masked_fill(eye_mask, -1e4)
-        probs = F.softmax(remote_scores, dim=-1)
+        if device.type == "cuda" and not compute_teacher_loss and num_blocks > 2:
+            # Active-block gathering on GPU: enables unmasked FlashAttention forward & backward with zero mask overhead!
+            eye_mask = torch.eye(num_blocks, dtype=torch.bool, device=device)[None]
+            remote_scores = scores.masked_fill(eye_mask, -1e4)
+            k_remote = min(self.indexer.max_remote_blocks, max(1, num_blocks - 1))
+            best_remote = remote_scores.mean(dim=1).topk(k=k_remote, dim=-1).indices
 
-        sorted_probs, sorted_idx = probs.sort(dim=-1, descending=True)
-        cumulative = sorted_probs.cumsum(dim=-1)
-        needed = (cumulative < self.indexer.top_p).sum(dim=-1) + 1
-        needed = torch.clamp(needed, 0, self.indexer.max_remote_blocks)
+            offsets = torch.arange(self.block_size, device=device)
+            act_list = [offsets[None, :].expand(batch, -1)]
+            for r in range(k_remote):
+                act_list.append(best_remote[:, r:r+1] * self.block_size + offsets[None, :])
+            act_tokens = torch.cat(act_list, dim=1)
 
-        # Vectorized block-sparse attention mask (zero Python loops)
-        q_blk_idx = torch.arange(seq_len, device=device) // self.block_size
-        self_mask = (q_blk_idx[:, None] == q_blk_idx[None, :])[None].expand(batch, -1, -1)
+            batch_idx = torch.arange(batch, device=device)[:, None]
+            k_act = k.transpose(1, 2)[batch_idx, act_tokens].transpose(1, 2)
+            v_act = v.transpose(1, 2)[batch_idx, act_tokens].transpose(1, 2)
 
-        capacity = sorted_idx.shape[-1]
-        slot_idx = torch.arange(capacity, device=device).view(1, 1, capacity)
-        valid = slot_idx < needed[..., None]
-        safe_remote = sorted_idx.masked_fill(~valid, 0)
+            attn_out = F.scaled_dot_product_attention(q, k_act, v_act, scale=self.scale)
+            sparsity = 1.0 - (act_tokens.shape[-1] / seq_len)
+        else:
+            # CPU fallback or teacher distillation mode
+            eye_mask = torch.eye(num_blocks, dtype=torch.bool, device=device)[None].expand(batch, -1, -1)
+            remote_scores = scores.masked_fill(eye_mask, -1e4)
+            probs = F.softmax(remote_scores, dim=-1)
 
-        block_active = torch.zeros(batch, num_blocks, num_blocks, dtype=torch.bool, device=device)
-        block_active.scatter_(2, safe_remote, valid)
+            sorted_probs, sorted_idx = probs.sort(dim=-1, descending=True)
+            cumulative = sorted_probs.cumsum(dim=-1)
+            needed = (cumulative < self.indexer.top_p).sum(dim=-1) + 1
+            needed = torch.clamp(needed, 0, self.indexer.max_remote_blocks)
 
-        expanded_remote = block_active.repeat_interleave(self.block_size, dim=1).repeat_interleave(
-            self.block_size, dim=2
-        )
-        allowed = self_mask | expanded_remote
+            # Vectorized block-sparse attention mask (zero Python loops)
+            q_blk_idx = torch.arange(seq_len, device=device) // self.block_size
+            self_mask = (q_blk_idx[:, None] == q_blk_idx[None, :])[None].expand(batch, -1, -1)
 
-        attn_out = F.scaled_dot_product_attention(
-            q, k, v, attn_mask=allowed[:, None, :, :], scale=self.scale
-        )
+            capacity = sorted_idx.shape[-1]
+            slot_idx = torch.arange(capacity, device=device).view(1, 1, capacity)
+            valid = slot_idx < needed[..., None]
+            safe_remote = sorted_idx.masked_fill(~valid, 0)
+
+            block_active = torch.zeros(batch, num_blocks, num_blocks, dtype=torch.bool, device=device)
+            block_active.scatter_(2, safe_remote, valid)
+
+            expanded_remote = block_active.repeat_interleave(self.block_size, dim=1).repeat_interleave(
+                self.block_size, dim=2
+            )
+            allowed = self_mask | expanded_remote
+
+            attn_out = F.scaled_dot_product_attention(
+                q, k, v, attn_mask=allowed[:, None, :, :], scale=self.scale
+            )
+            sparsity = 1.0 - allowed.float().mean().item()
+
         attn_out = attn_out.transpose(1, 2).reshape(batch, seq_len, self.embed_dim)
         out = self.out_proj(attn_out)
 
@@ -146,7 +173,6 @@ class FovealVisionAttention(nn.Module):
                 ).sum(dim=-1)
             distill_loss = self.indexer.distillation_loss(scores, teacher_mass)
 
-        sparsity = 1.0 - allowed.float().mean().item()
         return out, {"distill_loss": distill_loss, "sparsity": sparsity}
 
 
@@ -166,7 +192,7 @@ class DenseViTBlock(nn.Module):
 
     def forward(self, x: Tensor, compute_teacher_loss: bool = False) -> Tuple[Tensor, Dict[str, Any]]:
         h = self.ln1(x)
-        attn_out, _ = self.attn(h, h, h)
+        attn_out, _ = self.attn(h, h, h, need_weights=False)
         x = x + attn_out
         x = x + self.mlp(self.ln2(x))
         return x, {"distill_loss": torch.tensor(0.0, device=x.device), "sparsity": 0.0}
@@ -183,6 +209,10 @@ class FovealViTBlock(nn.Module):
         block_size: int = 16,
         top_p: float = 0.8,
         max_remote_blocks: int = 2,
+        mlp_block_size: int = 32,
+        mlp_base_blocks: int = 1,
+        mlp_max_remote_blocks: int = 2,
+        mlp_top_p: float = 0.5,
     ):
         super().__init__()
         self.ln1 = nn.LayerNorm(embed_dim)
@@ -198,10 +228,10 @@ class FovealViTBlock(nn.Module):
         self.fc1 = BlockSparseLinear(
             in_features=embed_dim,
             out_features=mlp_dim,
-            block_size=32,
-            base_blocks=1,
-            max_remote_blocks=2,
-            top_p=0.5,
+            block_size=mlp_block_size,
+            base_blocks=mlp_base_blocks,
+            max_remote_blocks=mlp_max_remote_blocks,
+            top_p=mlp_top_p,
         )
         self.fc2 = nn.Linear(mlp_dim, embed_dim)
 
@@ -244,6 +274,12 @@ class SmallViT(nn.Module):
         num_heads: int = 4,
         mlp_dim: int = 128,
         patch_block_size: int = 16,
+        attn_top_p: float = 0.8,
+        attn_max_remote_blocks: int = 2,
+        mlp_block_size: int = 32,
+        mlp_base_blocks: int = 1,
+        mlp_max_remote_blocks: int = 2,
+        mlp_top_p: float = 0.5,
     ):
         super().__init__()
         self.variant = variant
@@ -265,6 +301,12 @@ class SmallViT(nn.Module):
                         num_heads=num_heads,
                         mlp_dim=mlp_dim,
                         block_size=patch_block_size,
+                        top_p=attn_top_p,
+                        max_remote_blocks=attn_max_remote_blocks,
+                        mlp_block_size=mlp_block_size,
+                        mlp_base_blocks=mlp_base_blocks,
+                        mlp_max_remote_blocks=mlp_max_remote_blocks,
+                        mlp_top_p=mlp_top_p,
                     )
                 )
             else:

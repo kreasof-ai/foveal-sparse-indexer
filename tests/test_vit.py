@@ -28,6 +28,18 @@ class TestSmallViT(unittest.TestCase):
         loss.backward()
         self.assertIsNotNone(x.grad)
 
+    def test_foveal_vit_cuda_and_triton(self):
+        if not torch.cuda.is_available():
+            return
+        device = torch.device("cuda")
+        model = SmallViT(variant="foveal", img_size=32, patch_size=4, depth=1).to(device)
+        model.eval()
+        x = torch.randn(4, 1, 32, 32, device=device)
+        with torch.no_grad():
+            out, aux = model(x)
+        self.assertEqual(out.shape, (4, 10))
+        self.assertGreater(aux["mean_attn_sparsity"], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()
