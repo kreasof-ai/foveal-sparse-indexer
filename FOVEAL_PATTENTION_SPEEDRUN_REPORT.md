@@ -7,7 +7,24 @@
 
 ---
 
-## 1. Architectural Blueprint: The Unified Foveal Pattention Engine
+## 1. Executive Summary: Primary Showcased Configuration
+
+To ensure rigorous benchmarking with zero conflation between layer micro-benchmarks and model-level latency, we designate **one concrete, evaluated configuration as the primary showcase**:
+
+### **Showcase Configuration: Foveal Pattention (16 Layers, 1,536 Active Tokens)**
+- **Model:** `tencent/Hy-MT2-1.8B` (`HunYuanDenseV1`, 32 layers, hidden 2048, intermediate 6144, ~1.79B parameters)
+- **Sparsified Layers:** Layers 16 to 31 (16 layers converted to Foveal Pattention, 24/96 blocks active per layer)
+- **Dense Syntactic Stem:** Layers 0 to 15 (16 layers kept dense to preserve RoPE coordinate bindings)
+- **Active Parameter Sparsity:** **75.0%** (1,536 active parameter tokens out of 6,144 per sparsified layer)
+- **Translation Accuracy:** **24.00 BLEU** on held-out Microsoft/WMT22 `zh-en` (Dense Baseline: 23.91, **100.4% retention**, +0.09 BLEU gain)
+- **End-to-End Prefill Latency ($BS=4, L=256$):** **81.3 ms** (Dense Baseline: 95.9 ms, **1.18× end-to-end speedup**)
+- **End-to-End Decode Latency ($BS=16, L=1$):** **1,854.0 µs** (Dense Baseline: 2,682.7 µs, **1.45× end-to-end speedup**)
+- **Sparsified Layer Speedup (Layers 16–31):** **4.50× faster per layer** (0.684 ms vs 3.076 ms)
+- **Adaptation Distillation Time:** **11.82 minutes** (2,500 steps on NVIDIA A10G)
+
+---
+
+## 2. Architectural Blueprint: The Unified Foveal Pattention Engine
 
 Following the principles established in the CIFAR-10 Speedrun (`SPEEDRUN_REPORT.md`), we completely removed traditional blockwise sparse matrix multiplication in favor of **Token-Parameter Attention (Pattention)** with non-softmax SwiGLU gating, 16D SVD router initialization, a differentiable additive context stream, and dense KL distillation.
 
@@ -41,7 +58,7 @@ $$\text{Foveal Pattention: } y = \sum_{b \in \mathcal{B}_{\text{active}}} \left(
 
 ---
 
-## 2. Hardware Latency Scorecard (NVIDIA A10G)
+## 3. Hardware Latency Scorecard (NVIDIA A10G)
 
 ### A. Layer-Level Micro-Benchmark ($BS=4, L=256$, $D=2048, D_{\text{int}}=6144$)
 
@@ -65,7 +82,7 @@ $$\text{Foveal Pattention: } y = \sum_{b \in \mathcal{B}_{\text{active}}} \left(
 
 ---
 
-## 3. Translation Quality Scorecard (Held-Out WMT22 `zh-en`)
+## 4. Translation Quality Scorecard (Held-Out WMT22 `zh-en`)
 
 | Configuration | Distillation Budget | Active Channels | WMT22 BLEU (100 Sentences) | Dense Baseline | Retention | Qualitative Status |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -78,7 +95,7 @@ $$\text{Foveal Pattention: } y = \sum_{b \in \mathcal{B}_{\text{active}}} \left(
 
 ---
 
-## 4. Key Empirical Discoveries
+## 5. Key Empirical Discoveries
 
 1. **SVD Router + Additive Stream Eliminates Cold Start:**
    - In static slicing, step 1 loss started at **21.38** with garbled outputs (`the the the`).
@@ -95,7 +112,7 @@ $$\text{Foveal Pattention: } y = \sum_{b \in \mathcal{B}_{\text{active}}} \left(
 
 ---
 
-## 5. Sample Translations (Held-Out WMT22 `zh-en`)
+## 6. Sample Translations (Held-Out WMT22 `zh-en`)
 
 ### Sample 0
 - **Source:** `是否有途径处罚他`
