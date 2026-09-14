@@ -62,14 +62,23 @@ class DenseTokenformerBlock(nn.Module):
 
 
 class FovealTokenformerBlock(nn.Module):
-    def __init__(self, D: int = 256, heads: int = 4, num_params: int = 2048, active_params: int = 256):
+    def __init__(
+        self,
+        D: int = 256,
+        heads: int = 4,
+        num_params: int = 2048,
+        active_params: int = 256,
+        block_size: int = 64,
+        index_dim: int = 16,
+    ):
         super().__init__()
         self.D = D
         self.heads = heads
         self.head_dim = D // heads
         self.num_params = num_params
         self.active_params = active_params
-        self.block_size = 64
+        self.block_size = block_size
+        self.index_dim = index_dim
         self.num_blocks = num_params // self.block_size
         self.active_blocks = active_params // self.block_size
 
@@ -82,8 +91,8 @@ class FovealTokenformerBlock(nn.Module):
 
         self.k_p = nn.Parameter(torch.randn(num_params, D) * 0.02)
         self.v_p = nn.Parameter(torch.randn(num_params, D) * 0.02)
-        self.q16 = nn.Linear(D, 16, bias=False)
-        self.k16 = nn.Parameter(torch.randn(self.num_blocks, 16) * 0.02)
+        self.q16 = nn.Linear(D, index_dim, bias=False)
+        self.k16 = nn.Parameter(torch.randn(self.num_blocks, index_dim) * 0.02)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         h = self.ln1(x)
@@ -144,14 +153,24 @@ class DenseAttentionBlock(nn.Module):
 
 
 class FovealGatherBlock(nn.Module):
-    def __init__(self, D: int = 384, heads: int = 6, mlp_dim: int = 1536, n_patches: int = 1024, block_size: int = 32):
+    def __init__(
+        self,
+        D: int = 384,
+        heads: int = 6,
+        mlp_dim: int = 1536,
+        n_patches: int = 1024,
+        block_size: int = 32,
+        active_blocks: int = 2,
+        index_dim: int = 16,
+    ):
         super().__init__()
         self.D = D
         self.heads = heads
         self.head_dim = D // heads
         self.block_size = block_size
+        self.index_dim = index_dim
         self.num_blocks = n_patches // block_size
-        self.active_blocks = 2  # 2 blocks = 64 active tokens -> 93.8% attention sparsity!
+        self.active_blocks = active_blocks
         self.n_active = self.active_blocks * block_size
 
         self.ln1 = nn.LayerNorm(D)
@@ -159,8 +178,8 @@ class FovealGatherBlock(nn.Module):
         self.k = nn.Linear(D, D, bias=False)
         self.v = nn.Linear(D, D, bias=False)
         self.out = nn.Linear(D, D, bias=False)
-        self.q16 = nn.Linear(D, 16, bias=False)
-        self.k16 = nn.Linear(D, 16, bias=False)
+        self.q16 = nn.Linear(D, index_dim, bias=False)
+        self.k16 = nn.Linear(D, index_dim, bias=False)
         self.ln2 = nn.LayerNorm(D)
         self.fc1 = nn.Linear(D, mlp_dim)
         self.fc2 = nn.Linear(mlp_dim, D)
@@ -174,7 +193,7 @@ class FovealGatherBlock(nn.Module):
         h_pool = h.view(B, self.num_blocks, self.block_size, self.D).mean(dim=2)
         q16 = F.normalize(self.q16(h_pool), dim=-1)
         k16 = F.normalize(self.k16(h_pool), dim=-1)
-        scores = torch.bmm(q16, k16.transpose(1, 2)) * 0.25
+        scores = torch.bmm(q16, k16.transpose(1, 2)) / (self.index_dim ** 0.5)
         scores.diagonal(dim1=-2, dim2=-1).fill_(-1e4)
         best_remote = scores.mean(dim=1).argmax(dim=-1)
 
@@ -212,8 +231,13 @@ class ViTClassifier(nn.Module):
         return self.head(self.norm(h).mean(dim=1))
 
 
-def get_data(train_samples: int = 15000, test_samples: int = 3000, batch_size: int = 128):
-    data_dir = "./data"
+def get_data(
+    train_samples: int = 15000,
+    test_samples: int = 3000,
+    batch_size: int = 128,
+    data_dir: str = "./data",
+):
+    os.makedirs(data_dir, exist_ok=True)
     transform_train = transforms.Compose([
         transforms.RandomCrop(32, padding=4),
         transforms.RandomHorizontalFlip(),
@@ -233,18 +257,30 @@ def get_data(train_samples: int = 15000, test_samples: int = 3000, batch_size: i
         test_ds = datasets.CIFAR10(data_dir, train=False, download=True, transform=transform_test)
 
     g = torch.Generator().manual_seed(42)
-    tr_idx = torch.randperm(len(train_ds), generator=g)[:train_samples].tolist()
-    te_idx = torch.randperm(len(test_ds), generator=g)[:test_samples].tolist()
+    n_train = min(train_samples, len(train_ds))
+    n_test = min(test_samples, len(test_ds))
+    tr_idx = torch.randperm(len(train_ds), generator=g)[:n_train].tolist()
+    te_idx = torch.randperm(len(test_ds), generator=g)[:n_test].tolist()
 
     tr_loader = DataLoader(Subset(train_ds, tr_idx), batch_size=batch_size, shuffle=True, pin_memory=True)
     te_loader = DataLoader(Subset(test_ds, te_idx), batch_size=batch_size, shuffle=False, pin_memory=True)
     return tr_loader, te_loader
 
 
-def train_regime(model: nn.Module, name: str, train_loader: DataLoader, test_loader: DataLoader, device: torch.device, epochs: int = 4):
-    opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-3)
+def train_regime(
+    model: nn.Module,
+    name: str,
+    train_loader: DataLoader,
+    test_loader: DataLoader,
+    device: torch.device,
+    epochs: int = 4,
+    lr: float = 1e-3,
+    weight_decay: float = 1e-3,
+):
+    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     crit = nn.CrossEntropyLoss(label_smoothing=0.05)
-    scaler = torch.amp.GradScaler("cuda")
+    use_cuda = device.type == "cuda"
+    scaler = torch.amp.GradScaler("cuda", enabled=use_cuda)
     t_total = time.perf_counter()
 
     for ep in range(1, epochs + 1):
@@ -255,7 +291,7 @@ def train_regime(model: nn.Module, name: str, train_loader: DataLoader, test_loa
             img = img.to(device, non_blocking=True)
             lbl = lbl.to(device, non_blocking=True)
             opt.zero_grad(set_to_none=True)
-            with torch.amp.autocast("cuda", dtype=torch.float16):
+            with torch.amp.autocast("cuda" if use_cuda else "cpu", dtype=torch.float16 if use_cuda else torch.bfloat16, enabled=use_cuda):
                 loss = crit(model(img), lbl)
             scaler.scale(loss).backward()
             scaler.step(opt)
@@ -270,7 +306,7 @@ def train_regime(model: nn.Module, name: str, train_loader: DataLoader, test_loa
             for img, lbl in test_loader:
                 img = img.to(device, non_blocking=True)
                 lbl = lbl.to(device, non_blocking=True)
-                with torch.amp.autocast("cuda", dtype=torch.float16):
+                with torch.amp.autocast("cuda" if use_cuda else "cpu", dtype=torch.float16 if use_cuda else torch.bfloat16, enabled=use_cuda):
                     preds = model(img).argmax(dim=-1)
                 cor += (preds == lbl).sum().item()
                 tot += lbl.size(0)
@@ -281,30 +317,36 @@ def train_regime(model: nn.Module, name: str, train_loader: DataLoader, test_loa
     return acc, total_time
 
 
-def profile_inference(dense_m: nn.Module, foveal_m: nn.Module, device: torch.device):
+def profile_inference(dense_m: nn.Module, foveal_m: nn.Module, device: torch.device, batch_sizes: list[int] = None):
+    if batch_sizes is None:
+        batch_sizes = [1, 16, 32, 64, 128]
     dense_m.eval()
     foveal_m.eval()
+    use_cuda = device.type == "cuda"
     print("\n--- INFERENCE BENCHMARK ACROSS BATCH SIZES ---")
     print(f"{'Batch Size':<12} | {'Dense Latency':<16} | {'Foveal Latency':<16} | {'Speedup':<12}")
     print("-" * 62)
     with torch.no_grad():
-        for b in [1, 16, 32, 64, 128]:
+        for b in batch_sizes:
             x = torch.randn(b, 3, 32, 32, device=device)
-            with torch.amp.autocast("cuda", dtype=torch.float16):
+            with torch.amp.autocast("cuda" if use_cuda else "cpu", dtype=torch.float16 if use_cuda else torch.bfloat16, enabled=use_cuda):
                 for _ in range(5):
                     _ = dense_m(x)
                     _ = foveal_m(x)
-                torch.cuda.synchronize()
+                if use_cuda:
+                    torch.cuda.synchronize()
 
                 reps = 30
                 t0 = time.perf_counter()
                 for _ in range(reps): _ = dense_m(x)
-                torch.cuda.synchronize()
+                if use_cuda:
+                    torch.cuda.synchronize()
                 d_ms = (time.perf_counter() - t0) * 1000.0 / reps
 
                 t0 = time.perf_counter()
                 for _ in range(reps): _ = foveal_m(x)
-                torch.cuda.synchronize()
+                if use_cuda:
+                    torch.cuda.synchronize()
                 f_ms = (time.perf_counter() - t0) * 1000.0 / reps
 
             sp = d_ms / f_ms
@@ -318,6 +360,9 @@ def main():
     parser.add_argument("--batch-size", type=int, default=128, help="Batch size")
     parser.add_argument("--train-samples", type=int, default=10000, help="Train samples")
     parser.add_argument("--test-samples", type=int, default=2000, help="Test samples")
+    parser.add_argument("--data-dir", type=str, default="./data", help="Dataset directory")
+    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
+    parser.add_argument("--weight-decay", type=float, default=1e-3, help="Weight decay")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -327,7 +372,7 @@ def main():
     print(f"  DEMONSTRATING STRICTLY FASTER & MORE ACCURATE FOVEAL SPARSITY ON {gpu_name}")
     print("=" * 88)
 
-    train_loader, test_loader = get_data(args.train_samples, args.test_samples, args.batch_size)
+    train_loader, test_loader = get_data(args.train_samples, args.test_samples, args.batch_size, data_dir=args.data_dir)
 
     if args.regime in ["tokenformer", "both"]:
         print("\n" + "=" * 88)
@@ -338,8 +383,8 @@ def main():
         torch.manual_seed(42)
         foveal_tf = ViTClassifier(lambda: FovealTokenformerBlock(D=256, heads=4, num_params=4096, active_params=256), D=256, depth=4, patch_size=2).to(device)
 
-        d_acc, d_t = train_regime(dense_tf, "Dense Tokenformer (2K params)", train_loader, test_loader, device, epochs=args.epochs)
-        f_acc, f_t = train_regime(foveal_tf, "Foveal Tokenformer (4K params, 93.8% sp)", train_loader, test_loader, device, epochs=args.epochs)
+        d_acc, d_t = train_regime(dense_tf, "Dense Tokenformer (2K params)", train_loader, test_loader, device, epochs=args.epochs, lr=args.lr, weight_decay=args.weight_decay)
+        f_acc, f_t = train_regime(foveal_tf, "Foveal Tokenformer (4K params, 93.8% sp)", train_loader, test_loader, device, epochs=args.epochs, lr=args.lr, weight_decay=args.weight_decay)
 
         print("\n--- REGIME A FINAL SUMMARY ---")
         print(f"Dense Tokenformer (2K params):      Acc = {d_acc:.2f}% | Total Train Time = {d_t:.2f}s")
@@ -356,8 +401,8 @@ def main():
         torch.manual_seed(42)
         foveal_att = ViTClassifier(lambda: FovealGatherBlock(D=384, heads=6, mlp_dim=1536, n_patches=1024, block_size=32), D=384, depth=6, patch_size=1).to(device)
 
-        d_acc, d_t = train_regime(dense_att, "Dense ViT (N=1024)", train_loader, test_loader, device, epochs=args.epochs)
-        f_acc, f_t = train_regime(foveal_att, "Foveal Gather ViT (N=1024)", train_loader, test_loader, device, epochs=args.epochs)
+        d_acc, d_t = train_regime(dense_att, "Dense ViT (N=1024)", train_loader, test_loader, device, epochs=args.epochs, lr=args.lr, weight_decay=args.weight_decay)
+        f_acc, f_t = train_regime(foveal_att, "Foveal Gather ViT (N=1024)", train_loader, test_loader, device, epochs=args.epochs, lr=args.lr, weight_decay=args.weight_decay)
 
         print("\n--- REGIME B FINAL SUMMARY ---")
         print(f"Dense ViT:   Acc = {d_acc:.2f}% | Total Train Time = {d_t:.2f}s")
