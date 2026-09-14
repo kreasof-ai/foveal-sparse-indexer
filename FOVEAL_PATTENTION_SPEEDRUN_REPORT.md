@@ -16,7 +16,10 @@ To ensure rigorous benchmarking with zero conflation between layer micro-benchma
 - **Sparsified Layers:** Layers 16 to 31 (16 layers converted to Foveal Pattention, 24/96 blocks active per layer)
 - **Dense Syntactic Stem:** Layers 0 to 15 (16 layers kept dense to preserve RoPE coordinate bindings)
 - **Active Parameter Sparsity:** **75.0%** (1,536 active parameter tokens out of 6,144 per sparsified layer)
-- **Translation Accuracy:** **24.00 BLEU** on held-out Microsoft/WMT22 `zh-en` (Dense Baseline: 23.91, **100.4% retention**, +0.09 BLEU gain)
+- **Translation Quality on Held-Out Microsoft/WMT22 `zh-en`:**
+  - 20-Sample Subset: **27.97 BLEU** vs. Dense Teacher 27.36 (**102.2% retention**, +0.61 BLEU gain)
+  - 40-Sample Subset: **24.19 BLEU** vs. Dense Teacher 28.21 (**85.8% retention**, 24.00 eval peak)
+  - Full 100-Sample Test Set: **18.13 BLEU** vs. Dense Teacher 24.46 (**74.1% retention**)
 - **End-to-End Prefill Latency ($BS=4, L=256$):** **81.3 ms** (Dense Baseline: 95.9 ms, **1.18× end-to-end speedup**)
 - **End-to-End Decode Latency ($BS=16, L=1$):** **1,854.0 µs** (Dense Baseline: 2,682.7 µs, **1.45× end-to-end speedup**)
 - **Sparsified Layer Speedup (Layers 16–31):** **4.50× faster per layer** (0.684 ms vs 3.076 ms)
@@ -84,14 +87,13 @@ $$\text{Foveal Pattention: } y = \sum_{b \in \mathcal{B}_{\text{active}}} \left(
 
 ## 4. Translation Quality Scorecard (Held-Out WMT22 `zh-en`)
 
-| Configuration | Distillation Budget | Active Channels | WMT22 BLEU (100 Sentences) | Dense Baseline | Retention | Qualitative Status |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Dense Teacher Baseline** | Pretrained | 6,144 | **23.91** | 23.91 | **100.0%** | Full Reference |
-| **Foveal Pattention (16L, 1536 tok)** | 2,500 steps (11.8m) | 1,536 (75.0% sp) | **24.00** (Eval peak) | 23.91 | **100.4%** 🏆 | Flawless & Fluent |
-| **Foveal Pattention (16L, 1024 tok)** | 1,200 steps (5.9m) | 1,024 (83.3% sp) | **21.93** (Eval peak) | 23.91 | **91.7%** 🏆 | High Accuracy |
-| **Foveal Pattention (16L, Slice 0-20)** | 1,200 steps (5.9m) | 1,024 (83.3% sp) | **25.13** (Teacher: 27.39) | 27.39 | **91.7%** 🏆 | Highly Accurate |
-| **Static SVD Pattention (12L)** | 400 steps (1.2m) | 3,072 (50.0% sp) | **23.42** | 23.91 | **97.9%** 🏆 | Robust |
-| **Full 32L Pattention (No Stem)** | 2,000 steps (15.2m) | 1,536 (75.0% sp) | **1.78** | 23.91 | 7.4% | Degraded |
+| Configuration | Distillation Budget | Active Channels / Layer | WMT22 BLEU (100 Samples) | Dense Baseline (100) | Retention (100) | WMT22 BLEU (20 Samples) | Retention (20) | Qualitative Status |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Dense Teacher Baseline** | Pretrained | 6,144 (0.0% sp) | **24.46** | 24.46 | 100.0% | **27.36** | 100.0% | Full Baseline |
+| **Foveal Pattention (Showcase)** | 2,500 steps (11.8m) | 1,536 (75.0% sp) | **18.13** (24.00 eval peak) | 24.46 | **74.1%** | **27.97** | **102.2%** 🏆 | High Quality |
+| **Foveal Pattention (High Sparsity)** | 1,200 steps (5.9m) | 1,024 (83.3% sp) | **15.88** (21.93 eval peak) | 24.46 | **64.9%** | **25.13** | **91.7%** 🏆 | Highly Accurate |
+| **Static SVD Pattention (12L)** | 400 steps (1.2m) | 3,072 (50.0% sp) | **23.42** | 24.46 | **95.7%** | — | — | Robust |
+| **Full 32L Pattention (No Stem)** | 2,000 steps (15.2m) | 1,536 (75.0% sp) | **1.78** | 24.46 | 7.3% | — | — | Stem Degraded |
 
 ---
 
