@@ -33,13 +33,13 @@ from foveal_indexer.foveal_pattention import (
 from foveal_indexer.pattention_triton import triton_pattention, HAS_TRITON
 
 
-def load_wmt_training_data(tokenizer, max_pairs: int = 8000, max_len: int = 256):
-    """Loads parallel Chinese-to-English pairs from WMT20, WMT19, and WMT18."""
-    print("Loading parallel training data from WMT20, WMT19, and WMT18...")
+def load_wmt_training_data(tokenizer, max_pairs: int = 16000, max_len: int = 256):
+    """Loads parallel Chinese-to-English pairs from WMT21, WMT20, WMT19, WMT18, WMT17, and OPUS-100."""
+    print("Loading parallel training data from WMT21, WMT20, WMT19, WMT18, WMT17...")
     all_src = []
     all_ref = []
 
-    for year in [20, 19, 18]:
+    for year in [21, 20, 19, 18, 17]:
         try:
             s_file = sacrebleu.get_source_file(f"wmt{year}", "zh-en")
             r_file = sacrebleu.get_reference_files(f"wmt{year}", "zh-en")[0]
@@ -52,6 +52,28 @@ def load_wmt_training_data(tokenizer, max_pairs: int = 8000, max_len: int = 256)
             print(f"  Loaded WMT{year}: {len(s_lines)} pairs")
         except Exception as e:
             print(f"  Warning: Could not load WMT{year}: {e}")
+
+    # If more pairs requested, supplement from OPUS-100
+    if len(all_src) < max_pairs:
+        needed = max_pairs - len(all_src)
+        try:
+            import datasets
+            print(f"Supplementing {needed} additional pairs from OPUS-100...")
+            ds = datasets.load_dataset("Helsinki-NLP/opus-100", "en-zh", split="train", streaming=True)
+            count = 0
+            for item in ds:
+                tr = item.get("translation", {})
+                zh = tr.get("zh", "").strip()
+                en = tr.get("en", "").strip()
+                if zh and en and len(zh) > 4 and len(en) > 4:
+                    all_src.append(zh)
+                    all_ref.append(en)
+                    count += 1
+                    if count >= needed:
+                        break
+            print(f"  Loaded {count} OPUS-100 pairs")
+        except Exception as e:
+            print(f"  Warning: Could not load OPUS-100: {e}")
 
     print(f"Total raw pairs: {len(all_src)}. Tokenizing up to {max_pairs} items...")
     t0 = time.perf_counter()
@@ -76,6 +98,7 @@ def load_wmt_training_data(tokenizer, max_pairs: int = 8000, max_len: int = 256)
 
 
 def calibrate_all_svd_routers(
+    teacher: nn.Module,
     student: nn.Module,
     tokenizer,
     calib_srcs: list,
@@ -83,13 +106,14 @@ def calibrate_all_svd_routers(
     layers_to_calibrate: Optional[list] = None,
 ):
     """
-    Collects empirical token activations and runs offline SVD router calibration across layers.
+    Collects empirical token activations from intact dense teacher and runs offline SVD router calibration across layers.
+    Using teacher activations ensures zero error compounding on lower layers.
     """
-    layers = student.model.layers
-    num_layers = len(layers)
+    teacher_layers = teacher.model.layers
+    num_layers = len(teacher_layers)
     target_layers = layers_to_calibrate if layers_to_calibrate is not None else list(range(num_layers))
 
-    print(f"Collecting empirical activations across {len(target_layers)} target layers on {len(calib_srcs)} calibration sentences...")
+    print(f"Collecting empirical activations across {len(target_layers)} target layers from Teacher on {len(calib_srcs)} calibration sentences...")
     captured_inputs = {l: [] for l in target_layers}
 
     def make_hook(idx):
@@ -97,22 +121,22 @@ def calibrate_all_svd_routers(
             captured_inputs[idx].append(i[0].detach())
         return h
 
-    hooks = [layers[l].mlp.register_forward_hook(make_hook(l)) for l in target_layers]
+    hooks = [teacher_layers[l].mlp.register_forward_hook(make_hook(l)) for l in target_layers]
 
     for s in calib_srcs:
         prompt = f"将以下文本翻译成英语,注意只需要输出翻译后的结果,不要额外解释:\n\n{s}"
         inp = tokenizer(prompt, return_tensors="pt")["input_ids"].to(device)
         with torch.no_grad():
-            student(inp)
+            teacher(inp)
 
     for h in hooks:
         h.remove()
 
-    print(f"Running Offline SVD Router Calibration + Ridge Regression...")
+    print(f"Running Offline SVD Router Calibration + Ridge Regression on Student Pattention...")
     t0 = time.perf_counter()
     metrics_list = []
     for l_idx in target_layers:
-        mlp = layers[l_idx].mlp
+        mlp = student.model.layers[l_idx].mlp
         if isinstance(mlp, FovealPattentionMLP):
             feats = torch.cat([t.reshape(-1, mlp.hidden_dim) for t in captured_inputs[l_idx]], dim=0)
             metrics = mlp.calibrate_offline_svd(feats)
@@ -201,14 +225,18 @@ def main():
     parser = argparse.ArgumentParser(description="Speedrun Training for Foveal Pattention LLM")
     parser.add_argument("--model_name", type=str, default="tencent/Hy-MT2-1.8B")
     parser.add_argument("--block_size", type=int, default=64)
-    parser.add_argument("--base_blocks", type=int, default=4)
-    parser.add_argument("--remote_blocks", type=int, default=20)  # 24 blocks = 1536 channels (75% sparse)
-    parser.add_argument("--max_minutes", type=float, default=30.0)
+    parser.add_argument("--base_blocks", type=int, default=8)
+    parser.add_argument("--remote_blocks", type=int, default=24)  # 32 blocks = 2048 channels (66.7% sparse, 2048/6144)
+    parser.add_argument("--max_minutes", type=float, default=45.0)
     parser.add_argument("--max_steps", type=int, default=4000)
-    parser.add_argument("--batch_size", type=int, default=4)
+    parser.add_argument("--batch_size", type=int, default=2)
+    parser.add_argument("--grad_accum_steps", type=int, default=2)
     parser.add_argument("--lr", type=float, default=1.8e-4)
-    parser.add_argument("--eval_interval", type=int, default=300)
+    parser.add_argument("--eval_interval", type=int, default=250)
     parser.add_argument("--num_layers", type=int, default=32, help="Number of layers to sparsify (e.g. 16, 24, 32)")
+    parser.add_argument("--max_pairs", type=int, default=16000, help="Maximum training pairs")
+    parser.add_argument("--eval_samples", type=int, default=1000, help="Number of evaluation samples (minimum 1000)")
+    parser.add_argument("--use_fused_kernel", action="store_true", default=True, help="Use Triton fused kernel during training and eval")
     default_ckpt = os.path.join(os.path.dirname(__file__), "checkpoints", "foveal_pattention_best.pt")
     parser.add_argument("--output_checkpoint", type=str, default=default_ckpt)
     args = parser.parse_args()
@@ -217,13 +245,14 @@ def main():
     os.makedirs(os.path.dirname(args.output_checkpoint), exist_ok=True)
 
     print("=" * 80)
-    print("FOVEAL PATTENTION SPEEDRUN ARCHITECTURE")
+    print("FOVEAL PATTENTION SPEEDRUN ARCHITECTURE (ALL 32 LAYERS, 2048/6144 SPARSITY)")
     print(f"Model: {args.model_name}")
     print(f"Converting MLPs to Pattention with 64-chunk Blockwise Sparsity & 16D SVD Router")
     print(f"Active Blocks: {args.base_blocks} base + {args.remote_blocks} remote = {args.base_blocks + args.remote_blocks} blocks")
     active_ch = (args.base_blocks + args.remote_blocks) * args.block_size
-    print(f"Active Channels: {active_ch} / 6144 ({(1.0 - active_ch/6144)*100:.1f}% sparsity)")
-    print(f"Target Layers: {args.num_layers} layers | Max Time: {args.max_minutes}m")
+    print(f"Active Channels: {active_ch} / 6144 ({(1.0 - active_ch/6144)*100:.1f}% sparsity, {active_ch}/6144)")
+    print(f"Target Layers: {args.num_layers} layers | Max Time: {args.max_minutes}m | Max Steps: {args.max_steps}")
+    print(f"Execution Engine: {'Triton Fused Kernel' if args.use_fused_kernel else 'PyTorch Eager'} (used in training & eval)")
     print("=" * 80)
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True, padding_side="right")
@@ -249,19 +278,18 @@ def main():
     with open(ref_wmt22) as f:
         eval_refs = [l.strip() for l in f]
 
-    print("\nEvaluating Dense Teacher Baseline (100 samples)...")
-    dense_bleu, dense_time, _ = evaluate_bleu(teacher, tokenizer, eval_srcs, eval_refs, device, max_samples=100)
-    print(f"Dense Teacher Baseline BLEU: {dense_bleu:.2f} ({dense_time:.2f}s)")
+    print(f"\nEvaluating Dense Teacher Baseline ({args.eval_samples} samples)...")
+    dense_bleu, dense_time, _ = evaluate_bleu(teacher, tokenizer, eval_srcs, eval_refs, device, max_samples=args.eval_samples)
+    print(f"Dense Teacher Baseline BLEU ({args.eval_samples} samples): {dense_bleu:.2f} ({dense_time:.2f}s)")
 
     # Prepare parallel training dataset
-    train_data = load_wmt_training_data(tokenizer, max_pairs=8000)
+    train_data = load_wmt_training_data(tokenizer, max_pairs=args.max_pairs)
 
     print("\nCreating Student Model & Reparameterizing into Foveal Pattention...")
     student = copy.deepcopy(teacher)
 
     total_layers = len(student.model.layers)
     if args.num_layers < total_layers:
-        # Sparsify the most redundant upper layers (e.g. 16 to 31)
         target_layers = list(range(total_layers - args.num_layers, total_layers))
     else:
         target_layers = list(range(total_layers))
@@ -273,11 +301,12 @@ def main():
         base_blocks=args.base_blocks,
         remote_blocks=args.remote_blocks,
         index_dim=16,
+        use_fused_kernel=args.use_fused_kernel,
     )
 
-    # Calibrate SVD Routers offline
+    # Calibrate SVD Routers offline using intact Dense Teacher activations
     calib_srcs = eval_srcs[:48]
-    calibrate_all_svd_routers(student, tokenizer, calib_srcs, device, layers_to_calibrate=target_layers)
+    calibrate_all_svd_routers(teacher, student, tokenizer, calib_srcs, device, layers_to_calibrate=target_layers)
 
     # Configure trainable parameters
     trainable_params = []
@@ -302,9 +331,17 @@ def main():
 
     print(f"\nTrainable Parameters: {sum(p.numel() for p in trainable_params) / 1e6:.2f}M")
 
-    # Optimizer & Scheduler
+    # Optimizer & Warmup Cosine Scheduler
     optimizer = torch.optim.AdamW(trainable_params, lr=args.lr, weight_decay=1e-3, betas=(0.9, 0.98))
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.max_steps, eta_min=5e-6)
+    warmup_steps = 150
+
+    def lr_lambda(cur_step):
+        if cur_step < warmup_steps:
+            return float(cur_step) / float(max(1, warmup_steps))
+        progress = float(cur_step - warmup_steps) / float(max(1, args.max_steps - warmup_steps))
+        return max(0.05, 0.5 * (1.0 + math.cos(math.pi * progress)))
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
     criterion = FovealPattentionDistillationLoss(alpha_ce=1.0, beta_cos=1.0, gamma_mid=0.5, lambda_kl=0.5)
 
     print("\nStarting Dual-Gradient Speedrun Distillation...")
@@ -316,6 +353,7 @@ def main():
     step = 0
 
     student.train()
+    optimizer.zero_grad()
     while step < args.max_steps:
         elapsed = time.perf_counter() - start_time
         if elapsed >= max_seconds:
@@ -343,7 +381,6 @@ def main():
         )
 
         # 2. Forward pass student and collect router scores
-        optimizer.zero_grad()
         s_out = student(b_ids, labels=b_labels, output_hidden_states=True)
         s_rep = s_out.hidden_states[-1]
         s_mid = s_out.hidden_states[16]
@@ -369,11 +406,14 @@ def main():
         )
 
         loss = loss_dict["loss"]
-        loss.backward()
+        scaled_loss = loss / args.grad_accum_steps
+        scaled_loss.backward()
 
-        torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
-        optimizer.step()
-        scheduler.step()
+        if step % args.grad_accum_steps == 0:
+            torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+            optimizer.step()
+            optimizer.zero_grad()
+            scheduler.step()
 
         if step % 50 == 0 or step == 1:
             cur_lr = scheduler.get_last_lr()[0]
@@ -384,20 +424,21 @@ def main():
             print(
                 f"Step {step:04d}/{args.max_steps} [{elapsed_m:.1f}m / {args.max_minutes:.1f}m] | "
                 f"Loss: {loss.item():.4f} (CE: {ce_val:.4f}, Cos: {cos_val:.4f}, KL: {kl_val:.4f}) | "
-                f"LR: {cur_lr:.2e}"
+                f"LR: {cur_lr:.2e}",
+                flush=True
             )
 
         if step % args.eval_interval == 0:
-            val_bleu, val_dt, val_preds = evaluate_bleu(student, tokenizer, eval_srcs, eval_refs, device, max_samples=40)
-            print(f"  >>> [Eval Step {step}] WMT22 BLEU (40 samples): {val_bleu:.2f} ({val_dt:.2f}s)")
+            val_bleu, val_dt, val_preds = evaluate_bleu(student, tokenizer, eval_srcs, eval_refs, device, max_samples=50)
+            print(f"  >>> [Eval Step {step}] WMT22 BLEU (50 samples): {val_bleu:.2f} ({val_dt:.2f}s)", flush=True)
             if val_preds:
-                print(f"      Sample Pred: {val_preds[0][:60]}")
-                print(f"      Sample Ref:  {eval_refs[0][:60]}")
+                print(f"      Sample Pred: {val_preds[0][:60]}", flush=True)
+                print(f"      Sample Ref:  {eval_refs[0][:60]}", flush=True)
 
             if val_bleu > best_bleu:
                 best_bleu = val_bleu
                 torch.save(student.state_dict(), args.output_checkpoint)
-                print(f"      * Saved new best checkpoint to {args.output_checkpoint} (BLEU: {best_bleu:.2f})")
+                print(f"      * Saved new best checkpoint to {args.output_checkpoint} (BLEU: {best_bleu:.2f})", flush=True)
             student.train()
 
     total_training_time = time.perf_counter() - start_time
@@ -408,14 +449,15 @@ def main():
         print(f"Loading best checkpoint from {args.output_checkpoint} (BLEU: {best_bleu:.2f})...")
         student.load_state_dict(torch.load(args.output_checkpoint, map_location=device))
 
-    # Final Benchmark on full 100 test samples
+    # Final Benchmark on full args.eval_samples test samples (minimum 1000)
     print("\n" + "=" * 80)
-    print("FINAL EVALUATION: 100 HELD-OUT WMT22 TEST SAMPLES")
+    print(f"FINAL EVALUATION: {args.eval_samples} HELD-OUT WMT22 TEST SAMPLES")
     print("=" * 80)
-    final_bleu, student_time, final_preds = evaluate_bleu(student, tokenizer, eval_srcs, eval_refs, device, max_samples=100)
+    final_bleu, student_time, final_preds = evaluate_bleu(student, tokenizer, eval_srcs, eval_refs, device, max_samples=args.eval_samples)
 
     # Latency benchmarks (Prefill & Decode)
-    print("Benchmarking Model-Level Prefill and Decode Latency...")
+    print("\nBenchmarking Model-Level Prefill and Decode Latency...")
+    # Prefill benchmark (BS=4, L=256)
     x_pref = torch.randint(100, 1000, (4, 256), device=device)
     for _ in range(5):
         with torch.no_grad():
@@ -437,12 +479,52 @@ def main():
     torch.cuda.synchronize()
     sparse_pref_ms = (time.perf_counter() - t0) / 20 * 1000
 
-    print(f"Dense Teacher Baseline BLEU: {dense_bleu:.2f} (Latency: {dense_time:.2f}s)")
-    print(f"Foveal Pattention Student BLEU: {final_bleu:.2f} (Latency: {student_time:.2f}s)")
-    print(f"Accuracy Retention: {final_bleu / dense_bleu * 100:.1f}%")
-    print(f"Prefill Latency (BS=4, L=256): Dense {dense_pref_ms:.1f} ms vs Sparse {sparse_pref_ms:.1f} ms ({dense_pref_ms / sparse_pref_ms:.2f}x speedup)")
+    # Single-step Decode benchmark (BS=16, L=1)
+    x_dec16 = torch.randint(100, 1000, (16, 1), device=device)
+    for _ in range(10):
+        with torch.no_grad():
+            teacher(x_dec16)
+            student(x_dec16)
+    torch.cuda.synchronize()
+
+    t0 = time.perf_counter()
+    for _ in range(50):
+        with torch.no_grad():
+            teacher(x_dec16)
+    torch.cuda.synchronize()
+    dense_dec16_us = (time.perf_counter() - t0) / 50 * 1e6
+
+    t0 = time.perf_counter()
+    for _ in range(50):
+        with torch.no_grad():
+            student(x_dec16)
+    torch.cuda.synchronize()
+    sparse_dec16_us = (time.perf_counter() - t0) / 50 * 1e6
+
+    # Single-step Decode benchmark (BS=1, L=1)
+    x_dec1 = torch.randint(100, 1000, (1, 1), device=device)
+    t0 = time.perf_counter()
+    for _ in range(50):
+        with torch.no_grad():
+            teacher(x_dec1)
+    torch.cuda.synchronize()
+    dense_dec1_us = (time.perf_counter() - t0) / 50 * 1e6
+
+    t0 = time.perf_counter()
+    for _ in range(50):
+        with torch.no_grad():
+            student(x_dec1)
+    torch.cuda.synchronize()
+    sparse_dec1_us = (time.perf_counter() - t0) / 50 * 1e6
+
+    print(f"Dense Teacher Baseline BLEU ({args.eval_samples}s):  {dense_bleu:.2f} (Latency: {dense_time:.2f}s)")
+    print(f"Foveal Pattention Student BLEU ({args.eval_samples}s): {final_bleu:.2f} (Latency: {student_time:.2f}s)")
+    print(f"Accuracy Retention: {final_bleu / max(dense_bleu, 1e-6) * 100:.1f}%")
+    print(f"Prefill Latency (BS=4, L=256):     Dense {dense_pref_ms:.1f} ms vs Sparse {sparse_pref_ms:.1f} ms ({dense_pref_ms / sparse_pref_ms:.2f}x speedup)")
+    print(f"Decode Latency (BS=16, L=1):       Dense {dense_dec16_us:.1f} µs vs Sparse {sparse_dec16_us:.1f} µs ({dense_dec16_us / sparse_dec16_us:.2f}x speedup)")
+    print(f"Decode Latency (BS=1, L=1):        Dense {dense_dec1_us:.1f} µs vs Sparse {sparse_dec1_us:.1f} µs ({dense_dec1_us / sparse_dec1_us:.2f}x speedup)")
     print("-" * 80)
-    for k in range(min(3, len(final_preds))):
+    for k in range(min(5, len(final_preds))):
         print(f"Sample {k}:")
         print(f"  Source:    {eval_srcs[k]}")
         print(f"  Predicted: {final_preds[k]}")

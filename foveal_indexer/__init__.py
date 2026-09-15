@@ -40,6 +40,11 @@ from .triton_ops import (
     triton_fused_sram_indexer_attention,
     triton_block_sparse_linear,
 )
+from .optimizers import (
+    Muon,
+    HybridMuonAdamW,
+    zeropower_via_newtonschulz5,
+)
 
 __all__ = [
     "FovealIndexer",
@@ -84,4 +89,7 @@ __all__ = [
     "FovealPattentionMLP",
     "sparsify_model_with_foveal_pattention",
     "FovealPattentionDistillationLoss",
+    "Muon",
+    "HybridMuonAdamW",
+    "zeropower_via_newtonschulz5",
 ]

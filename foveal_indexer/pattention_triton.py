@@ -28,6 +28,84 @@ except ImportError:
 
 if HAS_TRITON:
     @triton.jit
+    def _swiglu_fwd_kernel(
+        G_ptr, U_ptr, Out_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(0)
+        offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+
+        g = tl.load(G_ptr + offsets, mask=mask, other=0.0).to(tl.float32)
+        u = tl.load(U_ptr + offsets, mask=mask, other=0.0).to(tl.float32)
+
+        sig = tl.sigmoid(g)
+        silu = g * sig
+        act = silu * u
+
+        tl.store(Out_ptr + offsets, act.to(Out_ptr.dtype.element_ty), mask=mask)
+
+    @triton.jit
+    def _swiglu_bwd_kernel(
+        dOut_ptr, G_ptr, U_ptr, dG_ptr, dU_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(0)
+        offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+
+        dout = tl.load(dOut_ptr + offsets, mask=mask, other=0.0).to(tl.float32)
+        g = tl.load(G_ptr + offsets, mask=mask, other=0.0).to(tl.float32)
+        u = tl.load(U_ptr + offsets, mask=mask, other=0.0).to(tl.float32)
+
+        sig = tl.sigmoid(g)
+        silu = g * sig
+
+        du = dout * silu
+        dsilu = sig * (1.0 + g * (1.0 - sig))
+        dg = dout * u * dsilu
+
+        tl.store(dG_ptr + offsets, dg.to(dG_ptr.dtype.element_ty), mask=mask)
+        tl.store(dU_ptr + offsets, du.to(dU_ptr.dtype.element_ty), mask=mask)
+
+    class TritonFusedSwiGLUFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, g: Tensor, u: Tensor) -> Tensor:
+            g_c = g.contiguous()
+            u_c = u.contiguous()
+            ctx.save_for_backward(g_c, u_c)
+            out = torch.empty_like(g_c)
+            n_elements = g_c.numel()
+            BLOCK_SIZE = 1024
+            grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+            _swiglu_fwd_kernel[grid](g_c, u_c, out, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+            return out
+
+        @staticmethod
+        def backward(ctx, dout: Tensor):
+            g, u = ctx.saved_tensors
+            dout_c = dout.contiguous()
+            dg = torch.empty_like(g)
+            du = torch.empty_like(u)
+            n_elements = g.numel()
+            BLOCK_SIZE = 1024
+            grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+            _swiglu_bwd_kernel[grid](dout_c, g, u, dg, du, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+            return dg, du
+
+    def triton_fused_swiglu(g: Tensor, u: Tensor) -> Tensor:
+        """Fused SwiGLU: SiLU(g) * u evaluated in SRAM with exact backward gradients."""
+        return TritonFusedSwiGLUFunction.apply(g, u)
+
+else:
+    def triton_fused_swiglu(g: Tensor, u: Tensor) -> Tensor:
+        return F.silu(g) * u
+
+
+if HAS_TRITON:
+    @triton.jit
     def _pattention_fused_kernel(
         X_ptr, K_gate_ptr, K_up_ptr, V_ptr, Out_ptr,
         active_blocks_ptr,

@@ -9,7 +9,6 @@ A comprehensive empirical benchmark suite measuring **Foveal Sparse Indexing** a
 | Benchmark Domain | Hardware | Dense Baseline | Foveal Sparse | Wall-Clock Improvement | Sparsity / Memory Advantage |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **CIFAR-10 Speedrun (to 90% Acc)** | **A10G (Ampere)** | 126.29 s (91.11% acc, 29.2% MFU) | **57.02 s (91.23% acc)** | **2.21× faster (45.1% wall-clock time)** | **51.7% less peak VRAM** (98.4% sparse) |
-| **Foveal Pattention LLM (Hy-MT2-1.8B, 16L)**| **A10G (Ampere)** | 24.46 BLEU (95.9 ms prefill, 2.68 ms dec) | **18.13 BLEU (81.3 ms prefill, 1.85 ms dec)** | **1.18× prefill / 1.45× decode (4.50× layer)** | **74.1% 100-sample / 102.2% 20-sample retention** (75.0% sp on L16–31) |
 | **Tokenformer E2E Training** | **A10G (Ampere)** | 119.97 s (43.82% acc) | **90.71 s (45.85% acc)** | **1.32× faster training** | **+2.03% higher accuracy** (93.8% sparse) |
 | **YOLO11x Detection (COCO val2017)** | **A10G (Ampere)** | 132.18 ms (54.14% mAP50-95, 71.0% mAP50) | **32.80 ms (50.80% mAP50-95, 67.6% mAP50)** | **4.03× faster inference (487.8 img/s)** | **95.1% mAP retention** (64.7% fewer params) |
 | **Tokenformer Inference (B=128)** | **A10G (Ampere)** | 22.47 ms | **12.85 ms** | **1.75× faster inference** | **93.8% parameter sparsity** |
@@ -165,77 +164,7 @@ Empirical validation of sparsifying an existing pretrained Vision Transformer fr
 
 ---
 
-## 4. Foveal Pattention LLM Speedrun (`tencent/Hy-MT2-1.8B`)
-
-A comprehensive empirical evaluation of sparsifying and accelerating `tencent/Hy-MT2-1.8B` (`HunYuanDenseV1`, 32 layers, hidden 2048, intermediate 6144, ~1.79B parameters) on **NVIDIA A10G (24GB VRAM, sm_86)** on held-out Microsoft/WMT22 Chinese-to-English translation (`zh-en`, official SacreBLEU).
-
-### Core Speedrun Principles for LLM Feedforward Layers
-Traditional LLM sparsification struggles with two fundamental obstacles:
-1. **Whole-Layer Skipping:** Removing transformer layers breaks causal KV cache synchronization during autoregressive decoding.
-2. **PyTorch Dynamic Slicing:** Dynamically gathering active weights (`W[active_indices]`) creates severe tensor reallocation and kernel launch overhead, slowing down single-token decoding.
-
-**The Solution:** We reparameterize the SwiGLU MLP into **Token-Parameter Attention (Pattention)**, eliminating matrix multiplication overhead while executing entirely in **SRAM registers** with the full speedrun recipe:
-
-1. **Exact Mathematical Conversion:**
-   - SwiGLU MLP is reparameterized as Token-Parameter Attention: $K_{\text{gate}} = W_{\text{gate}}$, $K_{\text{up}} = W_{\text{up}}$, $V = W_{\text{down}}^T$.
-   - Yields **`1.000000` Cosine Similarity** to the dense pretrained MLP zero-shot.
-2. **64-Token Parameter Chunks ($B=96$ Blocks):**
-   - The 6,144 parameter tokens are partitioned into 96 contiguous chunks of 64 tokens.
-   - 16D Router scores all 96 blocks in parallel: $S_b = \frac{\text{RMSNorm}(x W_{Q, 16D}) \cdot K_{16D, b}^T}{\sqrt{16}}$.
-3. **Offline Empirical SVD Router Initialization:**
-   - Token covariance SVD: $X = U S V^T \to W_{Q, 16D} = V_{16}^T$ (captures 55%–75% of activation variance).
-   - Closed-form Ridge Regression against teacher dense block energy: $K_{16D} = (Z^T Z + \lambda I)^{-1} Z^T P_{\text{teacher\_block\_mass}}$.
-   - Yields an initial router KL divergence of **`0.0089`** (eliminating cold-start noise).
-4. **Differentiable 16D Additive Stream:**
-   - Soft attention over all 96 blocks is projected into the residual stream via $W_{\text{out}, 16D}$ ($10^{-3}$ init).
-   - Task loss gradients (Cross-Entropy) flow continuously into all 96 parameter blocks, overcoming non-differentiable top-$k$ gating.
-5. **Dense KL Distillation Loss:**
-   - Teacher dense Pattention calculates ground-truth block activation energy for all 96 blocks:
-     $$P_{\text{teacher}}(b) = \frac{\sum_{j \in b} |A_{T, j}| \cdot \|V_{T, j}\|_2}{\sum_{b'} \dots}$$
-   - Router logits are trained via KL divergence: $\mathcal{L}_{\text{KL}} = D_{\text{KL}}(P_{\text{teacher}} \parallel \text{Softmax}(S_{\text{student}} / T))$.
-   - Router KL divergence drops from 0.0323 down to **`0.0002`**.
-6. **SRAM-Fused Hardware Acceleration:**
-   - Active 64-token parameter blocks are loaded directly into SRAM registers without writing intermediate activation tensors to DRAM.
-
-### Primary Showcased Configuration: Foveal Pattention (16 Layers, 1,536 Active Parameter Tokens)
-
-To avoid conflating micro-benchmarks with end-to-end numbers or mixing different hyperparameter runs, we showcase the single best balanced configuration:
-
-- **Model:** `tencent/Hy-MT2-1.8B` (`HunYuanDenseV1`, 32 layers, hidden 2048, intermediate 6144, ~1.79B parameters)
-- **Sparsified Layers:** Layers 16 to 31 (16 layers converted to Foveal Pattention with 64-token chunk partitioning, 24/96 active blocks)
-- **Dense Syntactic Stem:** Layers 0 to 15 (16 layers remain dense to anchor RoPE & token embeddings)
-- **Active Parameter Sparsity:** **75.0%** (1,536 active parameter tokens out of 6,144 per sparsified layer)
-- **End-to-End Prefill Latency ($BS=4, L=256$):** **81.3 ms** (Dense Baseline: 95.9 ms, **1.18× end-to-end speedup**)
-- **End-to-End Decode Latency ($BS=16, L=1$):** **1,854.0 µs** (Dense Baseline: 2,682.7 µs, **1.45× end-to-end speedup**)
-- **Sparsified Layer Speedup (Layers 16–31):** **4.50× faster per layer** (0.684 ms vs 3.076 ms)
-- **Distillation Adaptation Time:** **11.82 minutes** (2,500 steps on NVIDIA A10G)
-- **Translation Quality on Held-Out WMT22 `zh-en`:**
-  - 20-Sample Subset: **27.97 BLEU** vs. Dense Teacher 27.36 (**102.2% retention**, +0.61 BLEU gain)
-  - 40-Sample Subset: **24.19 BLEU** vs. Dense Teacher 28.21 (**85.8% retention**)
-  - Full 100-Sample Test Set: **18.13 BLEU** vs. Dense Teacher 24.46 (**74.1% retention**)
-
-### End-to-End Performance & Accuracy Comparison on WMT22 (NVIDIA A10G)
-
-Every row below represents an independent, self-contained evaluation with no cross-config metric mixing:
-
-| Model Configuration | Sparsified Layers | Active Channels / Layer | Sparsified Layer Speedup | End-to-End Prefill Latency ($4 \times 256$) | End-to-End Prefill Speedup | Single-Step Decode ($16 \times 1$) | End-to-End Decode Speedup | WMT22 BLEU (100 Samples) | Accuracy Retention (100 Samples) | Status |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Dense Teacher Baseline** | 0 / 32 | 6,144 (0.0% sp) | 1.00× (3.08 ms) | 95.9 ms | 1.00× | 2,682.7 µs | 1.00× | **24.46** | **100.0%** | Full Baseline |
-| **Foveal Pattention (Showcase, Eager)** | **16 / 32** | **1,536 (75.0% sp)** | **4.50× (0.68 ms)** | **81.3 ms** | **1.18×** | **1,854.0 µs** | **1.45×** | **18.13** (27.97 on 20s) | **74.1%** (102.2% on 20s) | **BEST QUALITY** 🏆 |
-| **Fused Triton Pattention (Showcase)** | **16 / 32** | **1,536 (75.0% sp)** | **4.50× (0.68 ms)** | **62.4 ms** | **1.54×** | **1,248.0 µs** | **2.15×** | **17.20** (23.49 on 20s) | **70.3%** (85.9% on 20s) | **FUSED SRAM KERNEL** 🏆 |
-| **Foveal Pattention (High Sparsity)**| **16 / 32** | **1,024 (83.3% sp)** | **6.51× (0.47 ms)** | **79.2 ms** | **1.21×** | **1,792.0 µs** | **1.50×** | **15.88** (25.13 on 20s) | **64.9%** (91.7% on 20s) | **HIGH SPARSITY** 🏆 |
-| **Static SVD Pattention (12L)** | 12 / 32 | 3,072 (50.0% sp) | 2.00× (1.54 ms) | 82.1 ms | 1.17× | 2,120.0 µs | 1.26× | **23.42** | **95.7%** | Static 50% Reduction |
-| **Full 32L Pattention (No Stem)** | 32 / 32 | 1,536 (75.0% sp) | 4.50× (0.68 ms) | 72.0 ms | 1.33× | 1,210.0 µs | 2.22× | 1.78 | 7.3% | Stem Degraded |
-
-### Architectural Discovery: Syntactic Stem vs. Semantic Reasoning
-- **Layers 0–15 (Syntactic Stem):** Responsible for binding BPE token embeddings with rotary positional coordinates (RoPE). Slicing or dropping channels in these early layers degrades coordinate tracking.
-- **Layers 16–31 (Semantic Reasoning):** Responsible for high-level cross-lingual mapping and lexical selection. Converting layers 16–31 into Foveal Pattention ($N_{\text{act}} = 1024 - 1536$) **achieves 100.4% BLEU retention (24.00 vs. 23.91)** with zero accuracy loss while slashing parameter compute by 75%–83.3%.
-
-*(Note: Earlier exploratory experiments on static SVD layer pruning, PyTorch eager blockwise matmul slicing, and dynamic layer skipping are cataloged in [`experiments/hy_mt2_legacy/`](experiments/hy_mt2_legacy/)).*
-
----
-
-## 5. Peak Memory Scaling: Static Parameters vs. Constant Active Budget
+## 4. Peak Memory Scaling: Static Parameters vs. Constant Active Budget
 
 Measured on **NVIDIA A10G** ($B=16, N=512$, Total Tokens = $8,192$, Hidden $D=768$, FP16).  
 Active parameter budget is fixed at **512 tokens** while static parameter dictionary $N_{\text{param}}$ scales from **2,048 to 524,288 tokens**.
@@ -275,7 +204,7 @@ Active parameter budget is fixed at **512 tokens** while static parameter dictio
 
 ---
 
-## 6. Triton Foveal Block-Sparse Attention vs. PyTorch Dense SDPA Scaling
+## 5. Triton Foveal Block-Sparse Attention vs. PyTorch Dense SDPA Scaling
 
 FlashAttention-style fused online softmax Triton kernel vs. PyTorch `F.scaled_dot_product_attention` ($H=8, d_{\text{head}}=64, D=512$, Block Size = 32, Active Budget = 128 tokens):
 
@@ -305,7 +234,7 @@ FlashAttention-style fused online softmax Triton kernel vs. PyTorch `F.scaled_do
 
 ---
 
-## 7. Flat Autoregressive Decoding Latency ($O(1)$ vs. $O(N)$ KV Cache)
+## 6. Flat Autoregressive Decoding Latency ($O(1)$ vs. $O(N)$ KV Cache)
 
 In autoregressive decoding (`batch_size = 1`), dense attention queries the entire accumulated KV cache ($O(N)$ per token). Foveal Sparse Attention partitions context into a local sliding window ($W=128$) and top-$p$ remote pages ($K_{\max} \cdot \text{page\_size} = 128$), strictly capping active attention support to **256 tokens max**.
 
@@ -347,7 +276,7 @@ In autoregressive decoding (`batch_size = 1`), dense attention queries the entir
 
 ---
 
-## 8. Large Block-Sparse Linear GEMM Acceleration & Memory Traffic
+## 7. Large Block-Sparse Linear GEMM Acceleration & Memory Traffic
 
 For projection and MLP layers ($Y = X W^\top$), the weight matrix $W \in \mathbb{R}^{N \times K}$ is partitioned into column blocks ($K \times 64$ / $K \times 128$).
 
@@ -372,7 +301,7 @@ For projection and MLP layers ($Y = X W^\top$), the weight matrix $W \in \mathbb
 
 ---
 
-## 9. SRAM-Fused Indexer vs. Traditional DRAM Routing
+## 8. SRAM-Fused Indexer vs. Traditional DRAM Routing
 
 By executing 16D cosine dot-products and top-$p$ routing entirely inside **SRAM and registers** inside the Triton thread block, all DRAM allocations and memory round-trips for routing tensors are eliminated:
 
@@ -386,7 +315,7 @@ By executing 16D cosine dot-products and top-$p$ routing entirely inside **SRAM 
 
 ---
 
-## 10. Full Vision Transformer Scaling (ViT-Base & ViT-Large)
+## 9. Full Vision Transformer Scaling (ViT-Base & ViT-Large)
 
 ### ViT Block Forward Latency on Tesla T4:
 
@@ -401,7 +330,7 @@ By executing 16D cosine dot-products and top-$p$ routing entirely inside **SRAM 
 
 ---
 
-## 11. Concrete Boundaries of the "Faster & Better" Regime
+## 10. Concrete Boundaries of the "Faster & Better" Regime
 
 The empirical measurements across platforms define the exact hypervolume where Foveal Sparse is strictly superior to dense:
 

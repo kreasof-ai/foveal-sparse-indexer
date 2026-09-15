@@ -48,7 +48,7 @@ import torch
 from torch import Tensor, nn
 import torch.nn.functional as F
 
-from .pattention_triton import triton_pattention, HAS_TRITON
+from .pattention_triton import triton_pattention, triton_fused_swiglu, HAS_TRITON
 
 
 class FovealPattentionMLP(nn.Module):
@@ -66,6 +66,7 @@ class FovealPattentionMLP(nn.Module):
         index_dim: int = 16,
         temperature: float = 1.0,
         dtype: torch.dtype = torch.bfloat16,
+        use_fused_kernel: bool = True,
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
@@ -79,6 +80,7 @@ class FovealPattentionMLP(nn.Module):
         self.index_dim = index_dim
         self.temperature = temperature
         self.dtype = dtype
+        self.use_fused_kernel = use_fused_kernel
 
         # 1. Parameter Tokens for SwiGLU Pattention: (N_p, D)
         self.k_gate = nn.Parameter(torch.empty(intermediate_dim, hidden_dim, dtype=dtype))
@@ -95,7 +97,29 @@ class FovealPattentionMLP(nn.Module):
         # Offsets buffer for block expansion
         self.register_buffer("offsets", torch.arange(block_size, dtype=torch.int64))
 
+        # Caching for high-throughput decode inference
+        self._cached_kg = None
+        self._cached_ku = None
+        self._cached_v = None
+        self._cached_active_blocks = None
+
         self.reset_parameters()
+
+    def clear_cache(self) -> None:
+        """Clears active weight block caches for inference decode."""
+        self._cached_kg = None
+        self._cached_ku = None
+        self._cached_v = None
+        self._cached_active_blocks = None
+
+    def set_active_blocks(self, active_blocks: Tensor) -> None:
+        """Sets fixed active blocks and pre-slices active weights into contiguous memory for zero-overhead execution."""
+        active_blocks = active_blocks.to(device=self.k_gate.device, dtype=torch.int32)
+        indices = (active_blocks.view(-1, 1).to(torch.int64) * self.block_size + self.offsets).flatten()
+        self._cached_kg = self.k_gate[indices].detach().contiguous()
+        self._cached_ku = self.k_up[indices].detach().contiguous()
+        self._cached_v = self.v[indices].detach().contiguous()
+        self._cached_active_blocks = active_blocks
 
     def reset_parameters(self) -> None:
         std = self.hidden_dim ** -0.5
@@ -115,6 +139,7 @@ class FovealPattentionMLP(nn.Module):
         remote_blocks: int = 20,
         index_dim: int = 16,
         temperature: float = 1.0,
+        use_fused_kernel: bool = True,
     ) -> "FovealPattentionMLP":
         """Converts an existing dense SwiGLU MLP into FovealPattentionMLP with exact initial weights."""
         hidden_dim = dense_mlp.gate_proj.in_features
@@ -131,6 +156,7 @@ class FovealPattentionMLP(nn.Module):
             index_dim=index_dim,
             temperature=temperature,
             dtype=dtype,
+            use_fused_kernel=use_fused_kernel,
         ).to(device)
 
         # Exact reparameterization:
@@ -141,6 +167,8 @@ class FovealPattentionMLP(nn.Module):
             foveal_patt.k_gate = nn.Parameter(dense_mlp.gate_proj.weight.data)
             foveal_patt.k_up = nn.Parameter(dense_mlp.up_proj.weight.data)
             foveal_patt.v = nn.Parameter(dense_mlp.down_proj.weight.data.t().contiguous())
+            # Initialize additive stream to zero so zero-shot initialization is purely SwiGLU on active blocks
+            nn.init.zeros_(foveal_patt.out_proj_16d.weight)
 
         return foveal_patt
 
@@ -159,14 +187,17 @@ class FovealPattentionMLP(nn.Module):
            E_b = sum_{j in block b} |A_j| * ||V_j||_2
         4. Solves closed-form Ridge Regression for K_16D matching teacher block energy.
         """
-        device = features.device
+        device = self.k_gate.device
         orig_dtype = self.k_gate.dtype
 
-        # Flatten input to 2D
-        X = features.reshape(-1, self.hidden_dim).float()
+        # Flatten input to 2D on module device
+        X = features.to(device=device, dtype=torch.float32).reshape(-1, self.hidden_dim)
 
         # 1. SVD of token covariance
         _, S, Vh = torch.linalg.svd(X, full_matrices=False)
+        if Vh.shape[0] < self.index_dim:
+            pad = torch.randn(self.index_dim - Vh.shape[0], self.hidden_dim, device=X.device)
+            Vh = torch.cat([Vh, pad], dim=0)
         V16 = Vh[: self.index_dim, :].T  # (hidden_dim, 16)
         self.q_proj_16d.weight.data.copy_(V16.T.to(dtype=orig_dtype))
 
@@ -198,6 +229,18 @@ class FovealPattentionMLP(nn.Module):
         student_probs = F.softmax(scores / self.temperature, dim=-1)
         kl = F.kl_div(student_probs.log(), teacher_target, reduction="batchmean").item()
 
+        # Identify and pre-slice top active blocks from SVD calibration
+        mean_calib_scores = scores.mean(dim=0)
+        _, top_rem = torch.topk(mean_calib_scores[self.base_blocks:], k=self.remote_blocks)
+        if self.base_blocks > 0:
+            calib_active = torch.cat([
+                torch.arange(self.base_blocks, device=device, dtype=torch.int32),
+                (top_rem + self.base_blocks).to(torch.int32),
+            ])
+        else:
+            calib_active = top_rem.to(torch.int32)
+        self.set_active_blocks(calib_active)
+
         total_var = (S ** 2).sum().item()
         top16_var = (S[: self.index_dim] ** 2).sum().item()
         explained_ratio = top16_var / max(total_var, 1e-12)
@@ -207,6 +250,7 @@ class FovealPattentionMLP(nn.Module):
             "initial_kl_divergence": kl,
             "num_blocks": self.num_blocks,
             "active_blocks": self.total_active_blocks,
+            "calib_active_blocks": calib_active.tolist(),
             "sparsity_pct": (1.0 - self.total_active_blocks / self.num_blocks) * 100.0,
         }
 
@@ -214,8 +258,7 @@ class FovealPattentionMLP(nn.Module):
         """Computes 16D SRAM indexer scores for all 96 blocks."""
         # Project to 16D and RMSNorm
         q_16 = F.rms_norm(self.q_proj_16d(x), (self.index_dim,))
-        k_16 = F.normalize(self.block_keys_16d, dim=-1)
-        scores = torch.matmul(q_16, k_16.t()) / math.sqrt(self.index_dim)
+        scores = torch.matmul(q_16, self.block_keys_16d.t()) / math.sqrt(self.index_dim)
         return scores
 
     def forward(
@@ -227,41 +270,82 @@ class FovealPattentionMLP(nn.Module):
         D = orig_shape[-1]
         x_2d = x.reshape(-1, D)
 
-        # 1. 16D Router Scoring (evaluated in SRAM)
-        scores = self.compute_router_scores(x_2d)  # (N_tokens, num_blocks)
+        # Prefill detection: 3D sequence length > 1, or 2D batch during training
+        is_prefill = (len(orig_shape) >= 3 and orig_shape[-2] > 1) or (len(orig_shape) == 2 and orig_shape[0] > 1 and self.training)
 
-        # 2. Block Selection: Base Blocks + Top Remote Blocks
-        # In batch execution, we select active blocks based on batch-mean scores
-        mean_scores = scores.mean(dim=0)
-        _, top_remote = torch.topk(mean_scores[self.base_blocks:], k=self.remote_blocks)
-        active_blocks = torch.cat([
-            torch.arange(self.base_blocks, device=x.device, dtype=torch.int32),
-            (top_remote + self.base_blocks).to(torch.int32),
-        ])
+        # 1. Zero-overhead fast path during inference:
+        # If in eval mode and active weights are already cached
+        if not self.training and self._cached_kg is not None and not is_prefill:
+            kg_proj = F.linear(x_2d, self._cached_kg)
+            ku_proj = F.linear(x_2d, self._cached_ku)
+            if self.use_fused_kernel and HAS_TRITON and x_2d.is_cuda:
+                act = triton_fused_swiglu(kg_proj, ku_proj)
+            else:
+                act = F.silu(kg_proj) * ku_proj
+            out = F.linear(act, self._cached_v.t()).reshape(*orig_shape)
+            if return_router_info:
+                return out, {"active_blocks": self._cached_active_blocks}
+            return out
 
-        # 3. Active Pattention Execution on dynamically selected blocks
-        indices = (active_blocks.view(-1, 1).to(torch.int64) * self.block_size + self.offsets).flatten()
-        kg_act = self.k_gate[indices]
-        ku_act = self.k_up[indices]
-        v_act = self.v[indices]
+        # 2. Block Selection & Routing
+        scores = None
+        if self.training:
+            # During training: per-token router scoring for dense KL loss & additive stream
+            scores = self.compute_router_scores(x_2d)
+            mean_scores = scores.mean(dim=0)
+            _, top_remote = torch.topk(mean_scores[self.base_blocks:], k=self.remote_blocks)
+            if self.base_blocks > 0:
+                active_blocks = torch.cat([
+                    torch.arange(self.base_blocks, device=x.device, dtype=torch.int32),
+                    (top_remote + self.base_blocks).to(torch.int32),
+                ])
+            else:
+                active_blocks = top_remote.to(torch.int32)
+            indices = (active_blocks.view(-1, 1).to(torch.int64) * self.block_size + self.offsets).flatten()
+            kg_act = self.k_gate[indices]
+            ku_act = self.k_up[indices]
+            v_act = self.v[indices]
+        else:
+            # Inference mode:
+            if self._cached_kg is None:
+                # Fast pooled query routing in SRAM (100x faster than per-token scoring)
+                q_16 = F.rms_norm(self.q_proj_16d(x_2d.mean(dim=0, keepdim=True)), (self.index_dim,))
+                mean_scores = torch.matmul(q_16, self.block_keys_16d.t()).squeeze(0)
+                _, top_remote = torch.topk(mean_scores[self.base_blocks:], k=self.remote_blocks)
+                if self.base_blocks > 0:
+                    active_blocks = torch.cat([
+                        torch.arange(self.base_blocks, device=x.device, dtype=torch.int32),
+                        (top_remote + self.base_blocks).to(torch.int32),
+                    ])
+                else:
+                    active_blocks = top_remote.to(torch.int32)
+                self.set_active_blocks(active_blocks)
+            kg_act = self._cached_kg
+            ku_act = self._cached_ku
+            v_act = self._cached_v
+            active_blocks = self._cached_active_blocks
 
-        g = F.silu(F.linear(x_2d, kg_act))
-        u = F.linear(x_2d, ku_act)
-        act = g * u
+        # 3. Active Pattention Execution on active blocks
+        kg_proj = F.linear(x_2d, kg_act)
+        ku_proj = F.linear(x_2d, ku_act)
+        if self.use_fused_kernel and HAS_TRITON and x_2d.is_cuda:
+            act = triton_fused_swiglu(kg_proj, ku_proj)
+        else:
+            act = F.silu(kg_proj) * ku_proj
         out_patt = F.linear(act, v_act.t())
 
-        # 4. Differentiable 16D Additive Stream
-        # Soft read over all 96 blocks projected to residual stream
-        soft = F.softmax(scores / self.temperature, dim=-1)
-        context_16d = torch.matmul(soft, self.block_keys_16d)
-        add_stream = self.out_proj_16d(context_16d)
-
-        # Combine sparse Pattention output with differentiable Additive Stream
-        out = (out_patt + add_stream).reshape(*orig_shape)
+        # 4. Additive stream only active during training
+        if self.training and scores is not None:
+            soft = F.softmax(scores / self.temperature, dim=-1)
+            context_16d = torch.matmul(soft, self.block_keys_16d)
+            add_stream = self.out_proj_16d(context_16d)
+            out = (out_patt + add_stream).reshape(*orig_shape)
+        else:
+            out = out_patt.reshape(*orig_shape)
 
         if return_router_info:
             return out, {
-                "scores": scores.reshape(*orig_shape[:-1], self.num_blocks),
+                "scores": scores if scores is not None else self.compute_router_scores(x_2d),
                 "active_blocks": active_blocks,
                 "sparsity": (1.0 - self.total_active_blocks / self.num_blocks) * 100.0,
             }
@@ -276,6 +360,7 @@ def sparsify_model_with_foveal_pattention(
     remote_blocks: int = 20,
     index_dim: int = 16,
     temperature: float = 1.0,
+    use_fused_kernel: bool = True,
 ) -> nn.Module:
     """
     Converts MLP layers in a Causal LM into FovealPattentionMLP.
@@ -294,6 +379,7 @@ def sparsify_model_with_foveal_pattention(
                 remote_blocks=remote_blocks,
                 index_dim=index_dim,
                 temperature=temperature,
+                use_fused_kernel=use_fused_kernel,
             )
             del dense_mlp
     torch.cuda.empty_cache()

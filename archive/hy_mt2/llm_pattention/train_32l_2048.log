@@ -1,0 +1,213 @@
+================================================================================
+FOVEAL PATTENTION SPEEDRUN ARCHITECTURE (ALL 32 LAYERS, 2048/6144 SPARSITY)
+Model: tencent/Hy-MT2-1.8B
+Converting MLPs to Pattention with 64-chunk Blockwise Sparsity & 16D SVD Router
+Active Blocks: 8 base + 24 remote = 32 blocks
+Active Channels: 2048 / 6144 (66.7% sparsity, 2048/6144)
+Target Layers: 32 layers | Max Time: 45.0m | Max Steps: 4000
+Execution Engine: Triton Fused Kernel (used in training & eval)
+================================================================================
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+[transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='dynamic': {'mscale', 'beta_fast', 'mscale_all_dim', 'beta_slow', 'alpha'}
+
+Loading Teacher Model (bfloat16)...
+[transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='dynamic': {'mscale', 'beta_fast', 'mscale_all_dim', 'beta_slow', 'alpha'}
+Loading weights:   0%|          | 0/355 [00:00<?, ?it/s]Loading weights:   8%|▊         | 28/355 [00:00<00:01, 273.98it/s]Loading weights:  34%|███▎      | 119/355 [00:00<00:00, 643.55it/s]Loading weights:  52%|█████▏    | 184/355 [00:00<00:00, 641.70it/s]Loading weights:  70%|███████   | 249/355 [00:00<00:00, 556.80it/s]Loading weights:  91%|█████████ | 323/355 [00:00<00:00, 609.78it/s]Loading weights: 100%|██████████| 355/355 [00:00<00:00, 595.33it/s]
+
+Evaluating Dense Teacher Baseline (1000 samples)...
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer TokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+Dense Teacher Baseline BLEU (1000 samples): 19.77 (78.32s)
+Loading parallel training data from WMT21, WMT20, WMT19, WMT18, WMT17...
+  Loaded WMT21: 1948 pairs
+  Loaded WMT20: 2000 pairs
+  Loaded WMT19: 2000 pairs
+  Loaded WMT18: 3981 pairs
+  Loaded WMT17: 2001 pairs
+Supplementing 4070 additional pairs from OPUS-100...
+  Loaded 4070 OPUS-100 pairs
+Total raw pairs: 16000. Tokenizing up to 16000 items...
+Tokenized 15944 pairs in 10.08s!
+
+Creating Student Model & Reparameterizing into Foveal Pattention...
+Collecting empirical activations across 32 target layers from Teacher on 48 calibration sentences...
+Running Offline SVD Router Calibration + Ridge Regression on Student Pattention...
+SVD Router Calibration completed in 14.51s!
+  Mean Top-16 Explained Variance: 67.6%
+  Mean Initial KL Divergence:      0.0089
+
+Trainable Parameters: 1210.24M
+
+Starting Dual-Gradient Speedrun Distillation...
+Step 0001/4000 [0.0m / 45.0m] | Loss: 13.4170 (CE: 12.0000, Cos: 0.9397, KL: 0.0071) | LR: 0.00e+00
+Step 0050/4000 [0.3m / 45.0m] | Loss: 12.3235 (CE: 10.9375, Cos: 0.9765, KL: 0.0066) | LR: 3.00e-05
+Step 0100/4000 [0.6m / 45.0m] | Loss: 9.2992 (CE: 7.9062, Cos: 0.9383, KL: 0.0058) | LR: 6.00e-05
+Step 0150/4000 [0.9m / 45.0m] | Loss: 8.7128 (CE: 7.4375, Cos: 0.9502, KL: 0.0039) | LR: 9.00e-05
+Step 0200/4000 [1.2m / 45.0m] | Loss: 8.6064 (CE: 7.5000, Cos: 0.8063, KL: 0.0046) | LR: 1.20e-04
+Step 0250/4000 [1.5m / 45.0m] | Loss: 6.4495 (CE: 5.5312, Cos: 0.6867, KL: 0.0054) | LR: 1.50e-04
+  >>> [Eval Step 250] WMT22 BLEU (50 samples): 0.56 (5.80s)
+      Sample Pred: In the rules of the rules of the regulations of the regulati
+      Sample Ref:  Is there a way to punish him?
+      * Saved new best checkpoint to experiments/llm_pattention/checkpoints/foveal_patt_32l_2048.pt (BLEU: 0.56)
+Step 0300/4000 [1.9m / 45.0m] | Loss: 8.0181 (CE: 7.0312, Cos: 0.7336, KL: 0.0027) | LR: 1.80e-04
+Step 0350/4000 [2.3m / 45.0m] | Loss: 5.9821 (CE: 5.1562, Cos: 0.5982, KL: 0.0033) | LR: 1.80e-04
+Step 0400/4000 [2.5m / 45.0m] | Loss: 5.6076 (CE: 4.6562, Cos: 0.7091, KL: 0.0015) | LR: 1.80e-04
+Step 0450/4000 [2.8m / 45.0m] | Loss: 5.1476 (CE: 4.3438, Cos: 0.5804, KL: 0.0010) | LR: 1.80e-04
+Step 0500/4000 [3.1m / 45.0m] | Loss: 4.9652 (CE: 4.2188, Cos: 0.5497, KL: 0.0010) | LR: 1.80e-04
+  >>> [Eval Step 500] WMT22 BLEU (50 samples): 2.08 (5.79s)
+      Sample Pred: Whether whether he was punished by the Department of the Dep
+      Sample Ref:  Is there a way to punish him?
+      * Saved new best checkpoint to experiments/llm_pattention/checkpoints/foveal_patt_32l_2048.pt (BLEU: 2.08)
+Step 0550/4000 [3.6m / 45.0m] | Loss: 5.4804 (CE: 4.6250, Cos: 0.6349, KL: 0.0031) | LR: 1.80e-04
+Step 0600/4000 [3.9m / 45.0m] | Loss: 4.5731 (CE: 3.9531, Cos: 0.4517, KL: 0.0028) | LR: 1.79e-04
+Step 0650/4000 [4.2m / 45.0m] | Loss: 4.4338 (CE: 3.7812, Cos: 0.4795, KL: 0.0013) | LR: 1.79e-04
+Step 0700/4000 [4.5m / 45.0m] | Loss: 5.4628 (CE: 4.7812, Cos: 0.4994, KL: 0.0030) | LR: 1.79e-04
+Step 0750/4000 [4.8m / 45.0m] | Loss: 3.6829 (CE: 2.9688, Cos: 0.5169, KL: 0.0009) | LR: 1.78e-04
+  >>> [Eval Step 750] WMT22 BLEU (50 samples): 1.43 (5.83s)
+      Sample Pred: It is a way to be legal and illegal to have a legal way to p
+      Sample Ref:  Is there a way to punish him?
+Step 0800/4000 [5.2m / 45.0m] | Loss: 4.3640 (CE: 3.6406, Cos: 0.5322, KL: 0.0031) | LR: 1.78e-04
+Step 0850/4000 [5.5m / 45.0m] | Loss: 3.7181 (CE: 3.0781, Cos: 0.4662, KL: 0.0019) | LR: 1.78e-04
+Step 0900/4000 [5.8m / 45.0m] | Loss: 4.9445 (CE: 4.3438, Cos: 0.4361, KL: 0.0022) | LR: 1.77e-04
+Step 0950/4000 [6.1m / 45.0m] | Loss: 5.1697 (CE: 4.4688, Cos: 0.5185, KL: 0.0012) | LR: 1.77e-04
+Step 1000/4000 [6.4m / 45.0m] | Loss: 4.1137 (CE: 3.4531, Cos: 0.4816, KL: 0.0013) | LR: 1.76e-04
+  >>> [Eval Step 1000] WMT22 BLEU (50 samples): 2.78 (5.82s)
+      Sample Pred: How will be punished him?
+      Sample Ref:  Is there a way to punish him?
+      * Saved new best checkpoint to experiments/llm_pattention/checkpoints/foveal_patt_32l_2048.pt (BLEU: 2.78)
+Step 1050/4000 [6.8m / 45.0m] | Loss: 3.6538 (CE: 2.9375, Cos: 0.5155, KL: 0.0008) | LR: 1.76e-04
+Step 1100/4000 [7.1m / 45.0m] | Loss: 4.1924 (CE: 3.6250, Cos: 0.4126, KL: 0.0012) | LR: 1.75e-04
+Step 1150/4000 [7.4m / 45.0m] | Loss: 4.6831 (CE: 4.0000, Cos: 0.4906, KL: 0.0010) | LR: 1.75e-04
+Step 1200/4000 [7.7m / 45.0m] | Loss: 3.9187 (CE: 3.1875, Cos: 0.5329, KL: 0.0012) | LR: 1.74e-04
+Step 1250/4000 [8.0m / 45.0m] | Loss: 4.1614 (CE: 3.4688, Cos: 0.5024, KL: 0.0014) | LR: 1.73e-04
+  >>> [Eval Step 1250] WMT22 BLEU (50 samples): 1.73 (5.83s)
+      Sample Pred: Yes, there is no way to deal with his penalty.
+      Sample Ref:  Is there a way to punish him?
+Step 1300/4000 [8.4m / 45.0m] | Loss: 3.0460 (CE: 2.3281, Cos: 0.5256, KL: 0.0011) | LR: 1.73e-04
+Step 1350/4000 [8.7m / 45.0m] | Loss: 4.6156 (CE: 3.9844, Cos: 0.4583, KL: 0.0015) | LR: 1.72e-04
+Step 1400/4000 [9.0m / 45.0m] | Loss: 3.5407 (CE: 2.8906, Cos: 0.4504, KL: 0.0006) | LR: 1.71e-04
+Step 1450/4000 [9.3m / 45.0m] | Loss: 5.0111 (CE: 4.2812, Cos: 0.5366, KL: 0.0012) | LR: 1.70e-04
+Step 1500/4000 [9.6m / 45.0m] | Loss: 4.4032 (CE: 3.7344, Cos: 0.4750, KL: 0.0006) | LR: 1.69e-04
+  >>> [Eval Step 1500] WMT22 BLEU (50 samples): 4.78 (4.95s)
+      Sample Pred: There is to be a way to punish him.
+      Sample Ref:  Is there a way to punish him?
+      * Saved new best checkpoint to experiments/llm_pattention/checkpoints/foveal_patt_32l_2048.pt (BLEU: 4.78)
+Step 1550/4000 [10.0m / 45.0m] | Loss: 2.6647 (CE: 2.1094, Cos: 0.3906, KL: 0.0006) | LR: 1.69e-04
+Step 1600/4000 [10.3m / 45.0m] | Loss: 4.5013 (CE: 3.8594, Cos: 0.4659, KL: 0.0014) | LR: 1.68e-04
+Step 1650/4000 [10.6m / 45.0m] | Loss: 3.6645 (CE: 3.1250, Cos: 0.3922, KL: 0.0014) | LR: 1.67e-04
+Step 1700/4000 [10.9m / 45.0m] | Loss: 3.2466 (CE: 2.7031, Cos: 0.3835, KL: 0.0009) | LR: 1.66e-04
+Step 1750/4000 [11.2m / 45.0m] | Loss: 3.4059 (CE: 2.9219, Cos: 0.3385, KL: 0.0008) | LR: 1.65e-04
+  >>> [Eval Step 1750] WMT22 BLEU (50 samples): 2.61 (6.21s)
+      Sample Pred: If the way to punish him in the way to make a score of a sco
+      Sample Ref:  Is there a way to punish him?
+Step 1800/4000 [11.6m / 45.0m] | Loss: 4.8827 (CE: 4.2500, Cos: 0.4570, KL: 0.0011) | LR: 1.64e-04
+Step 1850/4000 [11.9m / 45.0m] | Loss: 4.0621 (CE: 3.4844, Cos: 0.4113, KL: 0.0012) | LR: 1.63e-04
+Step 1900/4000 [12.2m / 45.0m] | Loss: 4.4672 (CE: 3.7969, Cos: 0.4803, KL: 0.0008) | LR: 1.61e-04
+Step 1950/4000 [12.5m / 45.0m] | Loss: 4.1702 (CE: 3.5469, Cos: 0.4403, KL: 0.0011) | LR: 1.60e-04
+Step 2000/4000 [12.8m / 45.0m] | Loss: 3.0946 (CE: 2.5469, Cos: 0.3777, KL: 0.0006) | LR: 1.59e-04
+  >>> [Eval Step 2000] WMT22 BLEU (50 samples): 4.72 (5.84s)
+      Sample Pred: If it is charged for him
+      Sample Ref:  Is there a way to punish him?
+Step 2050/4000 [13.2m / 45.0m] | Loss: 4.1273 (CE: 3.6094, Cos: 0.3674, KL: 0.0009) | LR: 1.58e-04
+Step 2100/4000 [13.5m / 45.0m] | Loss: 2.8786 (CE: 2.3594, Cos: 0.3721, KL: 0.0008) | LR: 1.57e-04
+Step 2150/4000 [13.8m / 45.0m] | Loss: 3.6396 (CE: 3.1250, Cos: 0.3649, KL: 0.0007) | LR: 1.56e-04
+Step 2200/4000 [14.1m / 45.0m] | Loss: 4.4245 (CE: 3.7500, Cos: 0.4853, KL: 0.0008) | LR: 1.54e-04
+Step 2250/4000 [14.4m / 45.0m] | Loss: 3.8045 (CE: 3.2500, Cos: 0.4036, KL: 0.0012) | LR: 1.53e-04
+  >>> [Eval Step 2250] WMT22 BLEU (50 samples): 5.91 (5.75s)
+      Sample Pred: The way punishment he was imposed on the way. The way punish
+      Sample Ref:  Is there a way to punish him?
+      * Saved new best checkpoint to experiments/llm_pattention/checkpoints/foveal_patt_32l_2048.pt (BLEU: 5.91)
+Step 2300/4000 [14.8m / 45.0m] | Loss: 2.6287 (CE: 2.1875, Cos: 0.3106, KL: 0.0006) | LR: 1.52e-04
+Step 2350/4000 [15.1m / 45.0m] | Loss: 3.6831 (CE: 3.1094, Cos: 0.4081, KL: 0.0007) | LR: 1.50e-04
+Step 2400/4000 [15.4m / 45.0m] | Loss: 3.1713 (CE: 2.6250, Cos: 0.3929, KL: 0.0011) | LR: 1.49e-04
+Step 2450/4000 [15.7m / 45.0m] | Loss: 3.2532 (CE: 2.6875, Cos: 0.4071, KL: 0.0008) | LR: 1.48e-04
+Step 2500/4000 [16.0m / 45.0m] | Loss: 2.3771 (CE: 1.8672, Cos: 0.3616, KL: 0.0008) | LR: 1.46e-04
+  >>> [Eval Step 2500] WMT22 BLEU (50 samples): 5.33 (5.78s)
+      Sample Pred: If he were punished his punishment and punished him, he will
+      Sample Ref:  Is there a way to punish him?
+Step 2550/4000 [16.4m / 45.0m] | Loss: 2.7977 (CE: 2.3281, Cos: 0.3301, KL: 0.0004) | LR: 1.45e-04
+Step 2600/4000 [16.7m / 45.0m] | Loss: 3.0759 (CE: 2.5312, Cos: 0.3835, KL: 0.0007) | LR: 1.43e-04
+Step 2650/4000 [17.0m / 45.0m] | Loss: 2.1067 (CE: 1.5547, Cos: 0.3871, KL: 0.0005) | LR: 1.42e-04
+Step 2700/4000 [17.3m / 45.0m] | Loss: 3.8890 (CE: 3.4531, Cos: 0.3095, KL: 0.0010) | LR: 1.40e-04
+Step 2750/4000 [17.6m / 45.0m] | Loss: 3.4992 (CE: 2.9688, Cos: 0.3754, KL: 0.0006) | LR: 1.39e-04
+  >>> [Eval Step 2750] WMT22 BLEU (50 samples): 9.11 (5.86s)
+      Sample Pred: No way to punish him is to be punished.
+      Sample Ref:  Is there a way to punish him?
+      * Saved new best checkpoint to experiments/llm_pattention/checkpoints/foveal_patt_32l_2048.pt (BLEU: 9.11)
+Step 2800/4000 [18.0m / 45.0m] | Loss: 3.2824 (CE: 2.8438, Cos: 0.3077, KL: 0.0007) | LR: 1.37e-04
+Step 2850/4000 [18.3m / 45.0m] | Loss: 2.6570 (CE: 2.1562, Cos: 0.3543, KL: 0.0006) | LR: 1.36e-04
+Step 2900/4000 [18.6m / 45.0m] | Loss: 3.0207 (CE: 2.3750, Cos: 0.4623, KL: 0.0006) | LR: 1.34e-04
+Step 2950/4000 [18.9m / 45.0m] | Loss: 4.0245 (CE: 3.5312, Cos: 0.3531, KL: 0.0012) | LR: 1.32e-04
+Step 3000/4000 [19.2m / 45.0m] | Loss: 3.1960 (CE: 2.6406, Cos: 0.3904, KL: 0.0005) | LR: 1.31e-04
+  >>> [Eval Step 3000] WMT22 BLEU (50 samples): 10.96 (5.81s)
+      Sample Pred: If there is any way to punish him.
+      Sample Ref:  Is there a way to punish him?
+      * Saved new best checkpoint to experiments/llm_pattention/checkpoints/foveal_patt_32l_2048.pt (BLEU: 10.96)
+Step 3050/4000 [19.7m / 45.0m] | Loss: 3.7599 (CE: 3.2031, Cos: 0.3954, KL: 0.0004) | LR: 1.29e-04
+Step 3100/4000 [20.0m / 45.0m] | Loss: 2.8030 (CE: 2.3438, Cos: 0.3237, KL: 0.0004) | LR: 1.27e-04
+Step 3150/4000 [20.3m / 45.0m] | Loss: 3.3416 (CE: 2.7500, Cos: 0.4196, KL: 0.0005) | LR: 1.26e-04
+Step 3200/4000 [20.6m / 45.0m] | Loss: 2.3401 (CE: 1.7578, Cos: 0.4129, KL: 0.0005) | LR: 1.24e-04
+Step 3250/4000 [20.9m / 45.0m] | Loss: 3.4387 (CE: 2.9375, Cos: 0.3435, KL: 0.0003) | LR: 1.22e-04
+  >>> [Eval Step 3250] WMT22 BLEU (50 samples): 7.23 (6.30s)
+      Sample Pred: There is a way to punish him.
+      Sample Ref:  Is there a way to punish him?
+Step 3300/4000 [21.3m / 45.0m] | Loss: 2.9400 (CE: 2.4062, Cos: 0.3736, KL: 0.0005) | LR: 1.21e-04
+Step 3350/4000 [21.6m / 45.0m] | Loss: 3.2009 (CE: 2.6406, Cos: 0.3938, KL: 0.0003) | LR: 1.19e-04
+Step 3400/4000 [21.9m / 45.0m] | Loss: 4.5973 (CE: 4.1562, Cos: 0.3098, KL: 0.0006) | LR: 1.17e-04
+Step 3450/4000 [22.2m / 45.0m] | Loss: 3.7903 (CE: 3.2344, Cos: 0.3806, KL: 0.0004) | LR: 1.15e-04
+Step 3500/4000 [22.5m / 45.0m] | Loss: 3.5319 (CE: 3.0000, Cos: 0.3839, KL: 0.0008) | LR: 1.14e-04
+  >>> [Eval Step 3500] WMT22 BLEU (50 samples): 7.79 (4.99s)
+      Sample Pred: Whether he was punished or he was punished?
+      Sample Ref:  Is there a way to punish him?
+Step 3550/4000 [22.9m / 45.0m] | Loss: 3.1376 (CE: 2.7344, Cos: 0.2575, KL: 0.0003) | LR: 1.12e-04
+Step 3600/4000 [23.2m / 45.0m] | Loss: 3.7884 (CE: 3.2500, Cos: 0.3869, KL: 0.0005) | LR: 1.10e-04
+Step 3650/4000 [23.5m / 45.0m] | Loss: 4.6752 (CE: 4.1562, Cos: 0.3664, KL: 0.0005) | LR: 1.08e-04
+Step 3700/4000 [23.8m / 45.0m] | Loss: 3.5705 (CE: 3.0312, Cos: 0.3832, KL: 0.0005) | LR: 1.06e-04
+Step 3750/4000 [24.1m / 45.0m] | Loss: 3.5796 (CE: 3.0469, Cos: 0.3837, KL: 0.0007) | LR: 1.05e-04
+  >>> [Eval Step 3750] WMT22 BLEU (50 samples): 8.07 (5.85s)
+      Sample Pred: Whether he can punish him
+      Sample Ref:  Is there a way to punish him?
+Step 3800/4000 [24.5m / 45.0m] | Loss: 4.1082 (CE: 3.5469, Cos: 0.3940, KL: 0.0005) | LR: 1.03e-04
+Step 3850/4000 [24.8m / 45.0m] | Loss: 3.8011 (CE: 3.2812, Cos: 0.3758, KL: 0.0007) | LR: 1.01e-04
+Step 3900/4000 [25.1m / 45.0m] | Loss: 2.6490 (CE: 2.0781, Cos: 0.4038, KL: 0.0004) | LR: 9.92e-05
+Step 3950/4000 [25.4m / 45.0m] | Loss: 3.9446 (CE: 3.4531, Cos: 0.3332, KL: 0.0002) | LR: 9.73e-05
+Step 4000/4000 [25.7m / 45.0m] | Loss: 2.5740 (CE: 2.1719, Cos: 0.2585, KL: 0.0002) | LR: 9.55e-05
+  >>> [Eval Step 4000] WMT22 BLEU (50 samples): 8.76 (5.19s)
+      Sample Pred: How to punish him in his way
+      Sample Ref:  Is there a way to punish him?
+
+Training finished in 1544.6s (25.74 minutes) across 4000 steps.
+Loading best checkpoint from experiments/llm_pattention/checkpoints/foveal_patt_32l_2048.pt (BLEU: 10.96)...
+
+================================================================================
+FINAL EVALUATION: 1000 HELD-OUT WMT22 TEST SAMPLES
+================================================================================
+
+Benchmarking Model-Level Prefill and Decode Latency...
+Dense Teacher Baseline BLEU (1000s):  19.77 (Latency: 78.32s)
+Foveal Pattention Student BLEU (1000s): 6.80 (Latency: 97.88s)
+Accuracy Retention: 34.4%
+Prefill Latency (BS=4, L=256):     Dense 95.9 ms vs Sparse 72.0 ms (1.33x speedup)
+Decode Latency (BS=16, L=1):       Dense 43545.4 µs vs Sparse 53645.6 µs (0.81x speedup)
+Decode Latency (BS=1, L=1):        Dense 42982.7 µs vs Sparse 52078.1 µs (0.83x speedup)
+--------------------------------------------------------------------------------
+Sample 0:
+  Source:    是否有途径处罚他
+  Predicted: If there is any way to punish him.
+  Reference: Is there a way to punish him?
+Sample 1:
+  Source:    以免再次发生这样的事情
+  Predicted: Avoid happening again so as a way.
+  Reference: So that such a thing won’t happen again.
+Sample 2:
+  Source:    又或者餐厅还要多久会准备好？可不可以帮我问下？
+  Predicted: What can help me? I don't want to find it?
+  Reference: And how much longer does it take for the restaurant to prepare it? Could could help me ask them?
+Sample 3:
+  Source:    浙大学术年会上学生唱主角 研究成果让人脑洞大开-新华网
+  Predicted: Zhejiang University students wrote a role at the annual student conference, and their research shows making a big opening-up - Xinhuaet
+  Reference: Students played the leading role at the Annual Academic Conference of Zhejiang University with creative research achievements - Xinhuanet
+Sample 4:
+  Source:    用空气来洗手，哈口气判断疾病，精确搜寻雾霾来源 昨天晚上，在浙江大学2016年学术年会开幕式上，一系列脑洞大开的学术成果获得表彰。
+  Predicted: The air water wash hands, the breath of the breath, judge of disease. The precise search of the source of cloud fogss on the academic conference, was held at the opening ceremony of academic universities in 2016, a series
+  Reference: Washing hands with air, diagnosing disease through breath, and accurately seeking for source of smog; last night, a series of creative academic achievements were awarded at the opening ceremony of the 2016 Annual Academic Conference of Zhejiang University.
+================================================================================

@@ -1,0 +1,39 @@
+================================================================================
+FOVEAL PATTENTION: ZERO-SHOT SVD ROUTER SPARSITY GRID SEARCH
+Model: tencent/Hy-MT2-1.8B
+Device: NVIDIA A10G
+Eval Samples: 100 | Calib Samples: 48
+Execution Engine: Fused Triton SwiGLU Kernel (training/inference zero discrepancy)
+================================================================================
+
+[1/5] Loading Tokenizer & Dense Teacher Model...
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+[transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='dynamic': {'alpha', 'beta_slow', 'beta_fast', 'mscale', 'mscale_all_dim'}
+[transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='dynamic': {'alpha', 'beta_slow', 'beta_fast', 'mscale', 'mscale_all_dim'}
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Loading weights:   0%|          | 0/355 [00:00<?, ?it/s]Loading weights:   5%|▍         | 17/355 [00:00<00:02, 168.33it/s]Loading weights:  29%|██▉       | 103/355 [00:00<00:00, 568.37it/s]Loading weights:  54%|█████▎    | 190/355 [00:00<00:00, 705.00it/s]Loading weights:  76%|███████▌  | 270/355 [00:00<00:00, 735.83it/s]Loading weights: 100%|██████████| 355/355 [00:00<00:00, 703.34it/s]
+
+[2/5] Loading WMT22 Test Data & Calibration Data...
+
+[3/5] Evaluating Dense Baseline (100 Samples & Hardware Latency)...
+[transformers] Ignoring clean_up_tokenization_spaces=True for BPE tokenizer TokenizersBackend. The clean_up_tokenization post-processing step is designed for WordPiece tokenizers and is destructive for BPE (it strips spaces before punctuation). Set clean_up_tokenization_spaces=False to suppress this warning, or set clean_up_tokenization_spaces_for_bpe_even_though_it_will_corrupt_output=True to force cleanup anyway.
+Dense Baseline SacreBLEU (100 samples): 23.83 (14.69s)
+Dense Baseline Prefill Latency (4x256): 95.80 ms
+Dense Baseline Decode Latency (16x1):   40876.3 µs
+Dense Baseline 32L MLP Stack Latency:   48.28 ms
+
+[4/5] Capturing Teacher Hidden States across all 32 layers on calibration set...
+Captured 2247 tokens of calibration features per layer.
+
+================================================================================
+RUNNING GRID SEARCH: All 32 Layers (Uniform Sparsity, L0–31)
+Target Layers Count: 32
+================================================================================
+
+--- Testing: 256/6144 (95.8% sp) | Without Base [0 base + 4 remote] ---
+  BLEU: 0.01 (0.0% ret, 15.88s) | Avg KL: 0.0049
+  Speedup: Model Prefill 1.92x (49.9ms) | MLP Prefill 11.46x (4.21ms vs 48.28ms)
+  Decode Speedup: Model 0.98x (41.89ms) | MLP Decode 1.30x (4.58ms vs 5.94ms)
+  Sample 0: 'annual annual annual annual annual annual annual annual annu...'
+
+--- Testing: 256/6144 (95.8% sp) | With Base (25%) [1 base + 3 remote] ---

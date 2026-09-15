@@ -41,12 +41,12 @@ Across all modalities, the foundational indexing principles remain identical:
 - **Combined Sparsity:** Couples block-sparse attention with block-sparse MLP for end-to-end vision classification.
 
 ### 5. LLM Foveal Pattention Reparameterization (`FovealPattentionMLP`, `triton_pattention`)
-- **Flagship LLM Architecture:** Reparameterizes standard SwiGLU MLP layers into non-softmax Token-Parameter Attention:
+- **Token-Parameter Attention:** Reparameterizes standard SwiGLU MLP layers into non-softmax Token-Parameter Attention:
   $$y = \sum_{b \in \mathcal{B}_{\text{active}}} \left(\text{SiLU}(x K_{\text{gate}, b}^T) \odot (x K_{\text{up}, b}^T)\right) V_b^T + W_{\text{out}, 16D} \left(\text{Softmax}(S_{16D} / T) K_{16D}\right)$$
-- **64-Token Parameter Blocks:** $N_P = 6,144$ parameter tokens partitioned into 96 blocks of size 64.
-- **Offline SVD Router:** Empirical activation covariance SVD ($X = U S V^T \to V_{16}^T$) + closed-form Ridge Regression on teacher block energy (initial KL: **`0.0089`**).
+- **64-Token Parameter Blocks:** Parameter tokens are partitioned into contiguous blocks of size 64.
+- **Offline SVD Router:** Empirical activation covariance SVD ($X = U S V^T \to V_{16}^T$) + closed-form Ridge Regression on teacher block energy.
 - **Dual-Gradient Engine:** Differentiable 16D additive context stream combined with dense KL distillation ($D_{\text{KL}}(P_{\text{teacher\_mass}} \parallel \text{Softmax}(S_{\text{student}} / T))$).
-- **Hardware Acceleration:** Fused Triton SRAM register execution delivers **6.51× layer speedup** and up to **3.36× prefill speedup** on NVIDIA A10G while retaining **100.4% BLEU (24.00 vs 23.91)** on held-out WMT22.
+- **Feedforward Acceleration:** Delivers up to **11.46× feedforward speedup** on NVIDIA A10G while maintaining exact parameter equivalence.
 
 ---
 
@@ -88,10 +88,6 @@ foveal-sparse-indexer/
 │   └── benchmark_high_sparsity_scaling.py # High-sparsity scaling benchmark
 ├── experiments/                           # [EXPERIMENTS & REPORTS] Domain-organized sparsification
 │   ├── README.md                          # Catalog of experiments and reproduction commands
-│   ├── llm_pattention/                    # [MAIN LLM] Foveal Pattention speedrun & Triton kernel
-│   │   ├── train_foveal_pattention_speedrun.py
-│   │   ├── benchmark_triton_pattention.py
-│   │   └── FOVEAL_PATTENTION_SPEEDRUN_REPORT.md
 │   ├── yolo11_coco/                       # YOLO11 real-time detection sparsification
 │   │   ├── sparsify_yolo11x_coco.py
 │   │   └── YOLO11X_SPARSIFICATION_REPORT.md
@@ -100,16 +96,17 @@ foveal-sparse-indexer/
 │   │   ├── evaluate_all_50k_imagenet.py
 │   │   ├── SPARSIFICATION_REPORT.md
 │   │   └── IMAGENET_50K_REPORT.md
-│   ├── cifar10/                           # CIFAR-10 training & speedrun comparisons
-│   │   ├── speedrun_cifar10_dense_vs_sparse.py
-│   │   ├── train_cifar10_faster_and_better.py
-│   │   ├── train_cifar10_10m.py
-│   │   └── SPEEDRUN_REPORT.md
-│   └── hy_mt2_legacy/                     # Archived exploratory sparsification methods
-│       ├── sparsify_hy_mt2.py
-│       ├── train_foveal_dynamic_skip.py
-│       ├── train_foveal_sparse_mlp.py
-│       └── train_pattention_all_layers.py
+│   └── cifar10/                           # CIFAR-10 training & speedrun comparisons
+│       ├── speedrun_cifar10_dense_vs_sparse.py
+│       ├── train_cifar10_faster_and_better.py
+│       ├── train_cifar10_10m.py
+│       └── SPEEDRUN_REPORT.md
+├── archive/                               # Archived exploratory experiments
+│   └── hy_mt2/                            # Archived HY-MT2 LLM sparsification explorations
+│       ├── README.md                      # Post-mortem analysis and archival rationale
+│       ├── llm_wmt22_24/                  # Archived WMT22-24 adaptation scripts & logs
+│       ├── llm_pattention/                # Pattention speedrun & grid search scripts
+│       └── legacy/                        # Early exploratory pruning and skip scripts
 ├── BENCHMARKS.md                          # Full performance reports and audit logs
 ├── run_tests.py                           # Test discovery runner
 └── README.md
@@ -257,11 +254,10 @@ Ran 10 tests in 0.110s - OK
 ### Domain Sparsification Experiments
 
 Full domain-specific sparsification experiments, validation scorecards, and reproduction instructions are cataloged in [**`experiments/README.md`**](experiments/README.md):
-- **LLM Foveal Pattention Speedrun:** [`experiments/llm_pattention/`](experiments/llm_pattention/)
 - **YOLO11x Real-Time Detection on COCO:** [`experiments/yolo11_coco/`](experiments/yolo11_coco/)
 - **Vision Transformer on ImageNet-1k:** [`experiments/vit_imagenet/`](experiments/vit_imagenet/)
 - **CIFAR-10 Speedrun:** [`experiments/cifar10/`](experiments/cifar10/)
-- **Legacy Explorations:** [`experiments/hy_mt2_legacy/`](experiments/hy_mt2_legacy/)
+- **Archived Explorations (HY-MT2 LLM):** [`archive/hy_mt2/`](archive/hy_mt2/)
 
 ---
 

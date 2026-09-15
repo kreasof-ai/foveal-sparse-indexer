@@ -13,6 +13,7 @@ from foveal_indexer.foveal_pattention import (
     sparsify_model_with_foveal_pattention,
     FovealPattentionDistillationLoss,
 )
+from foveal_indexer.pattention_triton import triton_fused_swiglu, HAS_TRITON
 
 
 class MockDenseMLP(nn.Module):
@@ -95,6 +96,34 @@ def test_foveal_pattention_forward_backward():
     assert patt.out_proj_16d.weight.grad is not None
 
 
+def test_foveal_pattention_without_base():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    hidden_dim = 256
+    intermediate_dim = 512
+    dense_mlp = MockDenseMLP(hidden_dim, intermediate_dim).to(device)
+    
+    patt = FovealPattentionMLP.from_dense_mlp(
+        dense_mlp,
+        block_size=64,
+        base_blocks=0,
+        remote_blocks=4,
+        index_dim=16,
+        use_fused_kernel=True,
+    ).to(device)
+    
+    x = torch.randn(2, 16, hidden_dim, device=device)
+    patt.eval()
+    out, info = patt(x, return_router_info=True)
+    
+    assert out.shape == (2, 16, hidden_dim)
+    assert len(info["active_blocks"]) == 4
+    # Test decode caching
+    patt.clear_cache()
+    x_step = torch.randn(2, 1, hidden_dim, device=device)
+    out_step = patt(x_step)
+    assert out_step.shape == (2, 1, hidden_dim)
+
+
 def test_distillation_loss():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     criterion = FovealPattentionDistillationLoss(alpha_ce=1.0, beta_cos=1.0, gamma_mid=0.5, lambda_kl=0.5)
@@ -121,3 +150,30 @@ def test_distillation_loss():
     assert "loss_cos" in losses
     assert "loss_kl" in losses
     assert losses["loss"].item() > 0
+
+
+@pytest.mark.skipif(not torch.cuda.is_available() or not HAS_TRITON, reason="CUDA and Triton required")
+def test_triton_fused_swiglu_correctness():
+    device = torch.device("cuda")
+    g = torch.randn(64, 128, device=device, dtype=torch.bfloat16, requires_grad=True)
+    u = torch.randn(64, 128, device=device, dtype=torch.bfloat16, requires_grad=True)
+
+    g_ref = g.detach().clone().requires_grad_(True)
+    u_ref = u.detach().clone().requires_grad_(True)
+
+    out_triton = triton_fused_swiglu(g, u)
+    out_ref = F.silu(g_ref) * u_ref
+
+    cos_fwd = F.cosine_similarity(out_triton.float().flatten(), out_ref.float().flatten(), dim=0).item()
+    assert cos_fwd > 0.9999
+
+    loss_triton = (out_triton * 3.0).sum()
+    loss_triton.backward()
+
+    loss_ref = (out_ref * 3.0).sum()
+    loss_ref.backward()
+
+    cos_dg = F.cosine_similarity(g.grad.float().flatten(), g_ref.grad.float().flatten(), dim=0).item()
+    cos_du = F.cosine_similarity(u.grad.float().flatten(), u_ref.grad.float().flatten(), dim=0).item()
+    assert cos_dg > 0.9999
+    assert cos_du > 0.9999
